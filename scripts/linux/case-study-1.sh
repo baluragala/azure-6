@@ -218,7 +218,6 @@ _deploy_infra() {
     --parameters "location=${location}" \
                  "subnetWebId=${SUBNET_WEB_ID}" \
                  "subnetAppId=${SUBNET_APP_ID}" \
-                 "subnetDbId=${SUBNET_DB_ID}" \
                  "adminPassword=${VM_PASSWORD}" \
     --name "deploy-infra-${role}-$(date +%Y%m%d%H%M%S)" \
     --output table

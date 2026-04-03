@@ -86,7 +86,6 @@ module infraPrimary './03-arm-templates/main.bicep' = {
     environment: environment
     subnetWebId: vnetPrimary.outputs.subnetWebId
     subnetAppId: vnetPrimary.outputs.subnetAppId
-    subnetDbId: vnetPrimary.outputs.subnetDbId
     adminUsername: adminUsername
     adminPassword: adminPassword
   }
@@ -113,7 +112,6 @@ module infraDr './03-arm-templates/main.bicep' = {
     environment: environment
     subnetWebId: vnetDr.outputs.subnetWebId
     subnetAppId: vnetDr.outputs.subnetAppId
-    subnetDbId: vnetDr.outputs.subnetDbId
     adminUsername: adminUsername
     adminPassword: adminPassword
   }

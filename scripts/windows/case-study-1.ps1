@@ -163,7 +163,6 @@ function Deploy-InfraStack {
         -location $Location `
         -subnetWebId $SubnetIds.Web `
         -subnetAppId $SubnetIds.App `
-        -subnetDbId $SubnetIds.Db `
         -adminPassword $vmPassword
 
     return Get-AzPublicIpAddress -ResourceGroupName $ResourceGroup -Name $LbPipName

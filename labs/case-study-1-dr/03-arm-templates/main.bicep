@@ -13,9 +13,6 @@ param subnetWebId string
 @description('Subnet ID for app tier VMs')
 param subnetAppId string
 
-@description('Subnet ID for database tier')
-param subnetDbId string
-
 @description('Admin username for VMs')
 param adminUsername string = 'azureadmin'
 
