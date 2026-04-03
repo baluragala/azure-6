@@ -22,15 +22,14 @@ Subnets segment the VNet's address space into smaller ranges. Each subnet:
 - Cannot overlap with other subnets
 - Azure reserves the first 4 and last 1 IP in each subnet
 
-### Example CIDR Planning (mirroring AWS architecture)
+### Example CIDR Planning (Azure dual-region DR lab)
 
 ```
 VNet: 10.0.0.0/16  (65,536 addresses)
-├── subnet-web       10.0.1.0/24   (256 addresses) - Web tier
-├── subnet-app       10.0.2.0/24   (256 addresses) - Application tier
-├── subnet-db        10.0.3.0/24   (256 addresses) - Database tier
-├── subnet-gateway   10.0.4.0/27   (32 addresses)  - VPN/ExpressRoute GW
-└── AzureBastionSubnet 10.0.5.0/27 (32 addresses)  - Bastion host
+├── subnet-web     10.0.1.0/24   (256 addresses) - Web tier
+├── subnet-app     10.0.2.0/24   (256 addresses) - Application tier
+├── subnet-db      10.0.3.0/24   (256 addresses) - Database tier
+└── subnet-gateway 10.0.4.0/27   (32 addresses)  - VPN/ExpressRoute GW
 ```
 
 ---
@@ -91,6 +90,8 @@ A managed PaaS service for secure RDP/SSH access to VMs without exposing public 
 - Requires a dedicated subnet named `AzureBastionSubnet` with `/27` minimum
 - Connects via browser-based client (no client software needed)
 - Logs sessions to Azure Monitor
+
+> **Lab note:** Azure Bastion is not deployed in this hands-on lab to keep deployment time short (~2 min vs ~15 min). To access VMs for troubleshooting, use Azure Cloud Shell or enable JIT VM Access in Microsoft Defender for Cloud.
 
 ---
 

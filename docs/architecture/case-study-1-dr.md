@@ -67,7 +67,6 @@ Both regions use the same VNet address space, subnet layout, NSG rules, and appl
          │  └──────────────────────┘    │   │  └──────────────────────────┘   │
          │                              │   │                                  │
          │  Storage: Standard_LRS       │   │  Storage: Standard_LRS          │
-         │  Bastion: AzureBastionSubnet │   │  Bastion: AzureBastionSubnet    │
          │                              │   │                                  │
          │  Azure DNS:                  │   │                                  │
          │  ├── Public Zone             │   │                                  │
@@ -119,7 +118,6 @@ FAILBACK (East US recovers):
 | `nsg-web-prod` | Both | Allow 443/80 from Internet |
 | `nsg-app-prod` | Both | Allow 8080 from web subnet only |
 | `nsg-db-prod` | Both | Allow 5432 from app subnet only |
-| `bastion-cloudinn-prod` | Both | Browser-based RDP/SSH, no public VM IPs |
 | `lb-web-prod` | Both | Standard Load Balancer |
 | `pip-lb-prod` | Both | Static public IP → Traffic Manager endpoint |
 | `vm-web-prod` | Both | Ubuntu 22.04 + Nginx (Standard_B2ms) |
@@ -141,7 +139,7 @@ Layer 1: Network (NSGs)
   └── DB tier  : Only 5432 from app subnet (10.0.2.0/24)
 
 Layer 2: VM Access
-  └── Azure Bastion on both regions: Secure RDP/SSH, no public IPs on VMs
+  └── VMs have no public IPs — access via Azure Cloud Shell or jump box if needed
 
 Layer 3: Data
   ├── Azure SQL: publicNetworkAccess = Disabled, TLS 1.2 minimum
