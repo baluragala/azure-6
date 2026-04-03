@@ -317,9 +317,14 @@ function Remove-LabResources {
     Write-Warn "This will delete BOTH resource groups ($RgPrimary and $RgDr)!"
     $confirm = Read-Host "Type 'yes' to confirm"
     if ($confirm -eq "yes") {
-        Remove-AzResourceGroup -Name $RgPrimary -Force -AsJob -ErrorAction SilentlyContinue
-        Remove-AzResourceGroup -Name $RgDr      -Force -AsJob -ErrorAction SilentlyContinue
-        Write-Ok "Deletion of both resource groups initiated (runs in background)"
+        foreach ($rg in @($RgPrimary, $RgDr)) {
+            if (Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue) {
+                Remove-AzResourceGroup -Name $rg -Force -AsJob
+                Write-Ok "Deletion initiated: $rg"
+            } else {
+                Write-Warn "Skipping $rg (does not exist)"
+            }
+        }
     }
     else {
         Write-Ok "Cleanup cancelled"

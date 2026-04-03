@@ -360,9 +360,14 @@ cleanup() {
   echo -e "Type 'yes' to confirm: "
   read -r confirm
   if [[ "${confirm}" == "yes" ]]; then
-    az group delete --name "${RESOURCE_GROUP_PRIMARY}" --yes --no-wait
-    az group delete --name "${RESOURCE_GROUP_DR}" --yes --no-wait
-    print_ok "Deletion of both resource groups initiated (runs in background)"
+    for rg in "${RESOURCE_GROUP_PRIMARY}" "${RESOURCE_GROUP_DR}"; do
+      if az group show --name "${rg}" &>/dev/null; then
+        az group delete --name "${rg}" --yes --no-wait
+        print_ok "Deletion initiated: ${rg}"
+      else
+        print_warn "Skipping ${rg} (does not exist)"
+      fi
+    done
   else
     print_ok "Cleanup cancelled"
   fi
