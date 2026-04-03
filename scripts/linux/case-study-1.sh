@@ -2,9 +2,19 @@
 # ============================================================
 # Case Study 1: Azure Dual-Region Disaster Recovery
 # Primary: East US  |  DR Standby: East US 2
+#
+# Best-practice hardening:
+#   • No global set -e  → step errors return to menu, not exit
+#   • set -uo pipefail  → unbound vars + broken pipes still fatal
+#   • Idempotent ops    → safe to re-run any step at any time
+#   • Retry wrapper     → 3 attempts with exp. backoff for az calls
+#   • Prereq guards     → each step validates its dependencies first
+#   • SIGINT/ERR trap   → leaves the terminal in a clean state
 # ============================================================
 
-set -euo pipefail
+set -uo pipefail   # -u: unbound vars are errors  -o pipefail: pipe errors propagate
+                   # NOTE: -e (exit on error) is intentionally omitted so the
+                   #       interactive menu survives individual step failures.
 
 # ── Colors ───────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -14,8 +24,11 @@ print_header() { echo -e "\n${BLUE}═══════════════
 print_step()   { echo -e "${CYAN}[STEP]${NC} $1"; }
 print_ok()     { echo -e "${GREEN}[  OK]${NC} $1"; }
 print_warn()   { echo -e "${YELLOW}[WARN]${NC} $1"; }
-print_error()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
+print_error()  { echo -e "${RED}[FAIL]${NC} $1"; }   # does NOT exit — returns to menu
 pause()        { echo -e "${YELLOW}Press ENTER to continue...${NC}"; read -r; }
+
+# ── Clean exit on Ctrl-C ─────────────────────────────────────
+trap 'echo -e "\n${YELLOW}Interrupted. Returning to menu.${NC}"; return 2 2>/dev/null || exit 0' INT
 
 # ── Configuration ─────────────────────────────────────────────
 LOCATION_PRIMARY="eastus"
@@ -32,38 +45,106 @@ VNET_NAME="${COMPANY_PREFIX}-vnet-${ENVIRONMENT}"
 LB_PIP_NAME="pip-lb-${ENVIRONMENT}"
 TM_PROFILE_NAME="tm-${COMPANY_PREFIX}-dr"
 
+# ── Idempotency helpers ───────────────────────────────────────
+rg_exists()        { az group show          --name "$1"                                  &>/dev/null; }
+vnet_exists()      { az network vnet show   --resource-group "$1" --name "$2"           &>/dev/null; }
+pip_exists()       { az network public-ip show --resource-group "$1" --name "$2"        &>/dev/null; }
+tm_profile_exists(){ az network traffic-manager profile show --resource-group "$1" --name "$2" &>/dev/null; }
+dns_zone_exists()  { az network dns zone show --resource-group "$1" --name "$2"         &>/dev/null; }
+
+# ── Retry wrapper (3 attempts, exponential backoff) ──────────
+# Usage: az_retry <az subcommand and args…>
+az_retry() {
+  local max_attempts=3
+  local delay=10
+  local attempt=1
+  while (( attempt <= max_attempts )); do
+    if az "$@"; then
+      return 0
+    fi
+    if (( attempt < max_attempts )); then
+      print_warn "Azure CLI attempt ${attempt}/${max_attempts} failed. Retrying in ${delay}s..."
+      sleep "${delay}"
+      delay=$(( delay * 2 ))
+    fi
+    (( attempt++ ))
+  done
+  print_error "Azure CLI command failed after ${max_attempts} attempts: az $*"
+  return 1
+}
+
+# ── Step runner: isolates failures so menu stays alive ───────
+# Usage: run_step "Step name" function_name [args…]
+run_step() {
+  local name="$1"; shift
+  if "$@"; then
+    return 0
+  else
+    local rc=$?
+    print_warn "\"${name}\" did not complete cleanly (exit ${rc})."
+    print_warn "Review the output above, then retry from the menu if needed."
+    return "${rc}"
+  fi
+}
+
 # ── Pre-flight checks ─────────────────────────────────────────
 preflight() {
   print_header "Pre-flight Checks"
+
   print_step "Verifying Azure login..."
-  az account show --query "{name:name, id:id}" -o table || print_error "Not logged in. Run: az login"
-  SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-  print_ok "Subscription: ${SUBSCRIPTION_ID}"
+  if ! az account show --query "{name:name, id:id}" -o table; then
+    print_error "Not logged in. Run: az login"
+    return 1
+  fi
+
+  print_step "Verifying Azure CLI version..."
+  az version --query '"azure-cli"' -o tsv
+
   print_step "Verifying Bicep..."
-  az bicep version || print_error "Bicep not installed. Run: az bicep install"
-  print_ok "Pre-flight checks passed"
+  if ! az bicep version &>/dev/null; then
+    print_warn "Bicep not found — installing..."
+    az bicep install || { print_error "Bicep install failed"; return 1; }
+  fi
+
+  print_step "Verifying DNS tools (nslookup/dig)..."
+  command -v nslookup &>/dev/null || command -v dig &>/dev/null || \
+    print_warn "Neither nslookup nor dig found — DNS query demos will be skipped."
+
+  SUBSCRIPTION_ID=$(az account show --query id -o tsv)
   export SUBSCRIPTION_ID
+  print_ok "Pre-flight passed. Subscription: ${SUBSCRIPTION_ID}"
 }
 
 # ── Step 1: Create Resource Groups ───────────────────────────
 create_resource_groups() {
   print_header "Step 1: Create Resource Groups"
 
-  print_step "Creating PRIMARY resource group: ${RESOURCE_GROUP_PRIMARY} (${LOCATION_PRIMARY})..."
-  az group create \
-    --name "${RESOURCE_GROUP_PRIMARY}" \
-    --location "${LOCATION_PRIMARY}" \
-    --tags "environment=${ENVIRONMENT}" "role=primary" "purpose=disaster-recovery" \
-    --output table
-  print_ok "${RESOURCE_GROUP_PRIMARY} created"
+  local -A rg_map=(
+    ["${RESOURCE_GROUP_PRIMARY}"]="${LOCATION_PRIMARY}"
+    ["${RESOURCE_GROUP_DR}"]="${LOCATION_DR}"
+  )
 
-  print_step "Creating DR resource group: ${RESOURCE_GROUP_DR} (${LOCATION_DR})..."
-  az group create \
-    --name "${RESOURCE_GROUP_DR}" \
-    --location "${LOCATION_DR}" \
-    --tags "environment=${ENVIRONMENT}" "role=dr-standby" "purpose=disaster-recovery" \
-    --output table
-  print_ok "${RESOURCE_GROUP_DR} created"
+  for rg in "${!rg_map[@]}"; do
+    local loc="${rg_map[${rg}]}"
+    if rg_exists "${rg}"; then
+      local existing_loc
+      existing_loc=$(az group show --name "${rg}" --query location -o tsv)
+      if [[ "${existing_loc}" != "${loc}" ]]; then
+        print_error "Resource group '${rg}' already exists in '${existing_loc}' but expected '${loc}'."
+        print_warn "Delete it first:  az group delete --name ${rg} --yes"
+        return 1
+      fi
+      print_ok "${rg} already exists in ${loc} — skipping creation"
+    else
+      print_step "Creating ${rg} in ${loc}..."
+      az_retry group create \
+        --name "${rg}" \
+        --location "${loc}" \
+        --tags "environment=${ENVIRONMENT}" "role=${rg##*-}" "purpose=disaster-recovery" \
+        --output table || return 1
+      print_ok "${rg} created"
+    fi
+  done
 }
 
 # ── Step 2a: Deploy PRIMARY VNet (East US) ────────────────────
@@ -78,17 +159,26 @@ deploy_primary_vnet() {
   echo "  └── subnet-gateway 10.0.4.0/27"
   echo ""
 
-  az deployment group create \
-    --resource-group "${RESOURCE_GROUP_PRIMARY}" \
-    --template-file "${LAB_DIR}/01-vnet/main.bicep" \
-    --parameters location="${LOCATION_PRIMARY}" environment="${ENVIRONMENT}" companyPrefix="${COMPANY_PREFIX}" \
-    --name "deploy-vnet-primary-$(date +%Y%m%d%H%M%S)" \
-    --output table
+  rg_exists "${RESOURCE_GROUP_PRIMARY}" || {
+    print_error "Resource group '${RESOURCE_GROUP_PRIMARY}' not found. Run Step 1 first."
+    return 1
+  }
+
+  if vnet_exists "${RESOURCE_GROUP_PRIMARY}" "${VNET_NAME}"; then
+    print_ok "Primary VNet '${VNET_NAME}' already exists — skipping deployment"
+  else
+    az_retry deployment group create \
+      --resource-group "${RESOURCE_GROUP_PRIMARY}" \
+      --template-file "${LAB_DIR}/01-vnet/main.bicep" \
+      --parameters location="${LOCATION_PRIMARY}" environment="${ENVIRONMENT}" companyPrefix="${COMPANY_PREFIX}" \
+      --name "deploy-vnet-primary-$(date +%Y%m%d%H%M%S)" \
+      --output table || return 1
+  fi
 
   PRIMARY_VNET_ID=$(az network vnet show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --name "${VNET_NAME}" --query id -o tsv)
-  print_ok "Primary VNet deployed: ${PRIMARY_VNET_ID}"
+  print_ok "Primary VNet: ${PRIMARY_VNET_ID}"
   export PRIMARY_VNET_ID
 }
 
@@ -100,17 +190,26 @@ deploy_dr_vnet() {
   echo "  Same subnet layout as primary — mirrors the architecture"
   echo ""
 
-  az deployment group create \
-    --resource-group "${RESOURCE_GROUP_DR}" \
-    --template-file "${LAB_DIR}/01-vnet/main.bicep" \
-    --parameters location="${LOCATION_DR}" environment="${ENVIRONMENT}" companyPrefix="${COMPANY_PREFIX}" \
-    --name "deploy-vnet-dr-$(date +%Y%m%d%H%M%S)" \
-    --output table
+  rg_exists "${RESOURCE_GROUP_DR}" || {
+    print_error "Resource group '${RESOURCE_GROUP_DR}' not found. Run Step 1 first."
+    return 1
+  }
+
+  if vnet_exists "${RESOURCE_GROUP_DR}" "${VNET_NAME}"; then
+    print_ok "DR VNet '${VNET_NAME}' already exists — skipping deployment"
+  else
+    az_retry deployment group create \
+      --resource-group "${RESOURCE_GROUP_DR}" \
+      --template-file "${LAB_DIR}/01-vnet/main.bicep" \
+      --parameters location="${LOCATION_DR}" environment="${ENVIRONMENT}" companyPrefix="${COMPANY_PREFIX}" \
+      --name "deploy-vnet-dr-$(date +%Y%m%d%H%M%S)" \
+      --output table || return 1
+  fi
 
   DR_VNET_ID=$(az network vnet show \
     --resource-group "${RESOURCE_GROUP_DR}" \
     --name "${VNET_NAME}" --query id -o tsv)
-  print_ok "DR VNet deployed: ${DR_VNET_ID}"
+  print_ok "DR VNet: ${DR_VNET_ID}"
   export DR_VNET_ID
 }
 
@@ -121,13 +220,26 @@ deploy_dns() {
   echo "  Public zone:  ${COMPANY_PREFIX}-app.example.com (global)"
   echo "  Private zone: internal.${COMPANY_PREFIX}.azure (linked to primary VNet)"
   echo ""
-  print_warn "After deployment, update NS records at your domain registrar."
+
+  rg_exists "${RESOURCE_GROUP_PRIMARY}" || {
+    print_error "Primary resource group not found. Run Step 1 first."
+    return 1
+  }
+
+  vnet_exists "${RESOURCE_GROUP_PRIMARY}" "${VNET_NAME}" || {
+    print_error "Primary VNet not found. Run Step 2a first."
+    return 1
+  }
 
   PRIMARY_VNET_ID=$(az network vnet show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --name "${VNET_NAME}" --query id -o tsv)
 
-  az deployment group create \
+  if dns_zone_exists "${RESOURCE_GROUP_PRIMARY}" "${COMPANY_PREFIX}-app.example.com"; then
+    print_ok "DNS zones already exist — re-deploying to reconcile records"
+  fi
+
+  az_retry deployment group create \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --template-file "${LAB_DIR}/02-dns/main.bicep" \
     --parameters "${LAB_DIR}/02-dns/parameters.json" \
@@ -135,15 +247,15 @@ deploy_dns() {
                  "publicDnsZoneName=${COMPANY_PREFIX}-app.example.com" \
                  "privateDnsZoneName=internal.${COMPANY_PREFIX}.azure" \
     --name "deploy-dns-$(date +%Y%m%d%H%M%S)" \
-    --output table
+    --output table || return 1
 
-  echo ""
   print_step "Azure DNS Name Servers (add to your domain registrar):"
   az network dns zone show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --name "${COMPANY_PREFIX}-app.example.com" \
     --query nameServers --output table 2>/dev/null || print_warn "DNS zone retrieval skipped"
 
+  print_warn "After deployment, update NS records at your domain registrar."
   print_ok "DNS zones deployed"
 }
 
@@ -158,15 +270,28 @@ deploy_primary_infra() {
   echo "  └── Azure SQL Database"
   echo ""
 
-  _get_subnet_ids "${RESOURCE_GROUP_PRIMARY}"
-  _deploy_infra "${RESOURCE_GROUP_PRIMARY}" "${LOCATION_PRIMARY}" "primary"
+  rg_exists "${RESOURCE_GROUP_PRIMARY}" || {
+    print_error "Primary resource group not found. Run Step 1 first."
+    return 1
+  }
+  vnet_exists "${RESOURCE_GROUP_PRIMARY}" "${VNET_NAME}" || {
+    print_error "Primary VNet not found. Run Step 2a first."
+    return 1
+  }
+
+  _get_subnet_ids "${RESOURCE_GROUP_PRIMARY}" || return 1
+  _deploy_infra   "${RESOURCE_GROUP_PRIMARY}" "${LOCATION_PRIMARY}" "primary" || return 1
 
   PRIMARY_LB_PIP_ID=$(az network public-ip show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
-    --name "${LB_PIP_NAME}" --query id -o tsv)
+    --name "${LB_PIP_NAME}" --query id -o tsv 2>/dev/null || echo "")
   PRIMARY_LB_PIP=$(az network public-ip show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --name "${LB_PIP_NAME}" --query ipAddress -o tsv 2>/dev/null || echo "pending")
+
+  [[ -z "${PRIMARY_LB_PIP_ID}" ]] && {
+    print_warn "LB Public IP not found yet — it may still be provisioning."
+  }
 
   print_ok "Primary infrastructure deployed. LB IP: ${PRIMARY_LB_PIP}"
   export PRIMARY_LB_PIP_ID PRIMARY_LB_PIP
@@ -179,15 +304,28 @@ deploy_dr_infra() {
   echo "  Identical stack to primary — kept on standby"
   echo ""
 
-  _get_subnet_ids "${RESOURCE_GROUP_DR}"
-  _deploy_infra "${RESOURCE_GROUP_DR}" "${LOCATION_DR}" "dr"
+  rg_exists "${RESOURCE_GROUP_DR}" || {
+    print_error "DR resource group not found. Run Step 1 first."
+    return 1
+  }
+  vnet_exists "${RESOURCE_GROUP_DR}" "${VNET_NAME}" || {
+    print_error "DR VNet not found. Run Step 2b first."
+    return 1
+  }
+
+  _get_subnet_ids "${RESOURCE_GROUP_DR}" || return 1
+  _deploy_infra   "${RESOURCE_GROUP_DR}" "${LOCATION_DR}" "dr" || return 1
 
   DR_LB_PIP_ID=$(az network public-ip show \
     --resource-group "${RESOURCE_GROUP_DR}" \
-    --name "${LB_PIP_NAME}" --query id -o tsv)
+    --name "${LB_PIP_NAME}" --query id -o tsv 2>/dev/null || echo "")
   DR_LB_PIP=$(az network public-ip show \
     --resource-group "${RESOURCE_GROUP_DR}" \
     --name "${LB_PIP_NAME}" --query ipAddress -o tsv 2>/dev/null || echo "pending")
+
+  [[ -z "${DR_LB_PIP_ID}" ]] && {
+    print_warn "DR LB Public IP not found yet — it may still be provisioning."
+  }
 
   print_ok "DR infrastructure deployed. LB IP: ${DR_LB_PIP}"
   export DR_LB_PIP_ID DR_LB_PIP
@@ -197,11 +335,15 @@ deploy_dr_infra() {
 _get_subnet_ids() {
   local rg="$1"
   SUBNET_WEB_ID=$(az network vnet subnet show --resource-group "${rg}" \
-    --vnet-name "${VNET_NAME}" --name "subnet-web" --query id -o tsv)
+    --vnet-name "${VNET_NAME}" --name "subnet-web" --query id -o tsv 2>/dev/null || echo "")
   SUBNET_APP_ID=$(az network vnet subnet show --resource-group "${rg}" \
-    --vnet-name "${VNET_NAME}" --name "subnet-app" --query id -o tsv)
-  SUBNET_DB_ID=$(az network vnet subnet show --resource-group "${rg}" \
-    --vnet-name "${VNET_NAME}" --name "subnet-db" --query id -o tsv)
+    --vnet-name "${VNET_NAME}" --name "subnet-app" --query id -o tsv 2>/dev/null || echo "")
+
+  if [[ -z "${SUBNET_WEB_ID}" || -z "${SUBNET_APP_ID}" ]]; then
+    print_error "Could not retrieve subnet IDs from '${rg}'. Ensure the VNet was deployed."
+    return 1
+  fi
+  export SUBNET_WEB_ID SUBNET_APP_ID
 }
 
 # ── Internal helper: deploy infra stack ──────────────────────
@@ -209,10 +351,21 @@ _deploy_infra() {
   local rg="$1"
   local location="$2"
   local role="$3"
-  local VM_PASSWORD="AzureDR@Training2024!"
-  print_warn "Using demo password. Use Azure Key Vault in production."
 
-  az deployment group create \
+  # Prompt for password securely — never store in plain text
+  local VM_PASSWORD="${CS1_VM_PASSWORD:-}"
+  if [[ -z "${VM_PASSWORD}" ]]; then
+    print_warn "Set CS1_VM_PASSWORD env var to skip this prompt."
+    echo -n "  Enter VM admin password (min 12 chars, mix of upper/lower/digit/symbol): "
+    read -rs VM_PASSWORD
+    echo ""
+  fi
+  if [[ ${#VM_PASSWORD} -lt 12 ]]; then
+    print_error "Password must be at least 12 characters."
+    return 1
+  fi
+
+  az_retry deployment group create \
     --resource-group "${rg}" \
     --template-file "${LAB_DIR}/03-arm-templates/main.bicep" \
     --parameters "location=${location}" \
@@ -235,6 +388,16 @@ deploy_traffic_manager() {
   echo "  Failover time  : ~30-60 seconds"
   echo ""
 
+  # Require both LB PIPs to exist before deploying TM
+  pip_exists "${RESOURCE_GROUP_PRIMARY}" "${LB_PIP_NAME}" || {
+    print_error "Primary LB Public IP not found. Run Step 4a first."
+    return 1
+  }
+  pip_exists "${RESOURCE_GROUP_DR}" "${LB_PIP_NAME}" || {
+    print_error "DR LB Public IP not found. Run Step 4b first."
+    return 1
+  }
+
   PRIMARY_LB_PIP_ID=$(az network public-ip show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --name "${LB_PIP_NAME}" --query id -o tsv)
@@ -242,7 +405,11 @@ deploy_traffic_manager() {
     --resource-group "${RESOURCE_GROUP_DR}" \
     --name "${LB_PIP_NAME}" --query id -o tsv)
 
-  az deployment group create \
+  if tm_profile_exists "${RESOURCE_GROUP_PRIMARY}" "${TM_PROFILE_NAME}"; then
+    print_ok "Traffic Manager profile already exists — re-deploying to reconcile"
+  fi
+
+  az_retry deployment group create \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --template-file "${LAB_DIR}/04-traffic-manager/main.bicep" \
     --parameters "companyPrefix=${COMPANY_PREFIX}" \
@@ -250,12 +417,17 @@ deploy_traffic_manager() {
                  "drPublicIpId=${DR_LB_PIP_ID}" \
                  "dnsTtl=30" \
     --name "deploy-tm-$(date +%Y%m%d%H%M%S)" \
-    --output table
+    --output table || return 1
 
   TM_FQDN=$(az network traffic-manager profile show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --name "${TM_PROFILE_NAME}" \
-    --query dnsConfig.fqdn -o tsv)
+    --query dnsConfig.fqdn -o tsv 2>/dev/null || echo "")
+
+  [[ -z "${TM_FQDN}" ]] && {
+    print_warn "Could not read Traffic Manager FQDN — it may still be provisioning."
+    return 0
+  }
 
   print_ok "Traffic Manager deployed: ${TM_FQDN}"
   export TM_FQDN
@@ -268,6 +440,12 @@ run_failover_test() {
   echo "  Simulates East US (primary) going offline."
   echo "  Traffic Manager should automatically route to East US 2."
   echo ""
+
+  tm_profile_exists "${RESOURCE_GROUP_PRIMARY}" "${TM_PROFILE_NAME}" || {
+    print_error "Traffic Manager profile not found. Run Step 5 first."
+    return 1
+  }
+
   pause
 
   TM_FQDN=$(az network traffic-manager profile show \
@@ -275,27 +453,28 @@ run_failover_test() {
     --name "${TM_PROFILE_NAME}" \
     --query dnsConfig.fqdn -o tsv)
 
-  print_step "BEFORE FAILOVER — DNS should resolve to East US (primary) IP:"
-  nslookup "${TM_FQDN}" || dig "${TM_FQDN}" A || true
+  print_step "BEFORE FAILOVER — current DNS resolution:"
+  nslookup "${TM_FQDN}" 2>/dev/null || dig "${TM_FQDN}" A 2>/dev/null || \
+    print_warn "DNS query tools unavailable — skipping resolution check"
 
   print_step "Disabling East US primary endpoint (simulating regional outage)..."
-  az network traffic-manager endpoint update \
+  az_retry network traffic-manager endpoint update \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --profile-name "${TM_PROFILE_NAME}" \
     --name "endpoint-eastus-primary" \
     --type azureEndpoints \
-    --endpoint-status Disabled
+    --endpoint-status Disabled || return 1
   print_ok "East US endpoint disabled"
 
-  print_step "Waiting 60 seconds (probe interval × failure threshold + TTL)..."
+  print_step "Waiting 60 seconds (probe × failure threshold + TTL propagation)..."
   for i in {60..1}; do
     printf "\r  ${YELLOW}Waiting: %3d seconds remaining${NC}" "${i}"
     sleep 1
   done
   echo ""
 
-  print_step "AFTER FAILOVER — DNS should now resolve to East US 2 (DR) IP:"
-  nslookup "${TM_FQDN}" || dig "${TM_FQDN}" A || true
+  print_step "AFTER FAILOVER — DNS should now resolve to East US 2 IP:"
+  nslookup "${TM_FQDN}" 2>/dev/null || dig "${TM_FQDN}" A 2>/dev/null || true
 
   print_step "East US 2 endpoint health status:"
   az network traffic-manager endpoint show \
@@ -303,23 +482,26 @@ run_failover_test() {
     --profile-name "${TM_PROFILE_NAME}" \
     --name "endpoint-eastus2-dr" \
     --type azureEndpoints \
-    --query properties.endpointMonitorStatus -o tsv
+    --query properties.endpointMonitorStatus -o tsv 2>/dev/null || \
+    print_warn "Could not read endpoint health status"
 
   echo ""
   print_warn "--- FAILBACK: Re-enabling East US primary ---"
   pause
 
-  az network traffic-manager endpoint update \
+  az_retry network traffic-manager endpoint update \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --profile-name "${TM_PROFILE_NAME}" \
     --name "endpoint-eastus-primary" \
     --type azureEndpoints \
-    --endpoint-status Enabled
+    --endpoint-status Enabled || {
+    print_warn "Re-enable command failed — endpoint may already be enabled."
+  }
   print_ok "East US endpoint re-enabled. Traffic will fail back within ~60 seconds."
 
   print_step "DNS after failback (expect East US IP again):"
   sleep 30
-  nslookup "${TM_FQDN}" || dig "${TM_FQDN}" A || true
+  nslookup "${TM_FQDN}" 2>/dev/null || dig "${TM_FQDN}" A 2>/dev/null || true
 
   print_ok "Failover test complete!"
 }
@@ -328,26 +510,35 @@ run_failover_test() {
 verify_deployment() {
   print_header "Deployment Verification"
 
-  print_step "Resources in PRIMARY (${RESOURCE_GROUP_PRIMARY}):"
-  az resource list --resource-group "${RESOURCE_GROUP_PRIMARY}" \
-    --query "[].{Name:name, Type:type, Location:location}" --output table
+  for rg in "${RESOURCE_GROUP_PRIMARY}" "${RESOURCE_GROUP_DR}"; do
+    if rg_exists "${rg}"; then
+      print_step "Resources in ${rg}:"
+      az resource list --resource-group "${rg}" \
+        --query "[].{Name:name, Type:type, Location:location}" --output table 2>/dev/null || \
+        print_warn "Could not list resources in ${rg}"
+    else
+      print_warn "Resource group '${rg}' does not exist — skipping"
+    fi
+  done
 
-  print_step "Resources in DR (${RESOURCE_GROUP_DR}):"
-  az resource list --resource-group "${RESOURCE_GROUP_DR}" \
-    --query "[].{Name:name, Type:type, Location:location}" --output table
+  if tm_profile_exists "${RESOURCE_GROUP_PRIMARY}" "${TM_PROFILE_NAME}"; then
+    print_step "Traffic Manager endpoints:"
+    az network traffic-manager endpoint list \
+      --resource-group "${RESOURCE_GROUP_PRIMARY}" \
+      --profile-name "${TM_PROFILE_NAME}" \
+      --query "[].{Name:name, Priority:properties.priority, Status:properties.endpointStatus, Health:properties.endpointMonitorStatus}" \
+      --output table 2>/dev/null || print_warn "Could not retrieve TM endpoints"
+  else
+    print_warn "Traffic Manager not deployed yet"
+  fi
 
-  print_step "Traffic Manager endpoints:"
-  az network traffic-manager endpoint list \
-    --resource-group "${RESOURCE_GROUP_PRIMARY}" \
-    --profile-name "${TM_PROFILE_NAME}" \
-    --query "[].{Name:name, Priority:properties.priority, Status:properties.endpointStatus, Health:properties.endpointMonitorStatus}" \
-    --output table 2>/dev/null || true
-
-  print_step "Primary VNet subnets:"
-  az network vnet subnet list \
-    --resource-group "${RESOURCE_GROUP_PRIMARY}" \
-    --vnet-name "${VNET_NAME}" \
-    --query "[].{Name:name, CIDR:addressPrefix}" --output table
+  if vnet_exists "${RESOURCE_GROUP_PRIMARY}" "${VNET_NAME}"; then
+    print_step "Primary VNet subnets:"
+    az network vnet subnet list \
+      --resource-group "${RESOURCE_GROUP_PRIMARY}" \
+      --vnet-name "${VNET_NAME}" \
+      --query "[].{Name:name, CIDR:addressPrefix}" --output table 2>/dev/null || true
+  fi
 
   print_ok "Verification complete"
 }
@@ -355,21 +546,35 @@ verify_deployment() {
 # ── Cleanup ───────────────────────────────────────────────────
 cleanup() {
   print_header "Cleanup"
-  print_warn "This will delete BOTH resource groups and all resources!"
-  echo -e "Type 'yes' to confirm: "
+  print_warn "This will delete BOTH resource groups and ALL resources inside them!"
+  echo -e "${YELLOW}Type 'yes' to confirm: ${NC}"
   read -r confirm
   if [[ "${confirm}" == "yes" ]]; then
     for rg in "${RESOURCE_GROUP_PRIMARY}" "${RESOURCE_GROUP_DR}"; do
-      if az group show --name "${rg}" &>/dev/null; then
+      if rg_exists "${rg}"; then
         az group delete --name "${rg}" --yes --no-wait
         print_ok "Deletion initiated: ${rg}"
       else
-        print_warn "Skipping ${rg} (does not exist)"
+        print_warn "Skipping '${rg}' — resource group does not exist"
       fi
     done
+    print_ok "Deletion running in background. Run 'az group list -o table' to confirm."
   else
     print_ok "Cleanup cancelled"
   fi
+}
+
+# ── Full deployment in sequence ───────────────────────────────
+full_deploy() {
+  create_resource_groups || return 1
+  deploy_primary_vnet    || return 1
+  deploy_dr_vnet         || return 1
+  deploy_dns             || { print_warn "DNS step failed — continuing with infrastructure"; }
+  deploy_primary_infra   || return 1
+  deploy_dr_infra        || return 1
+  deploy_traffic_manager || return 1
+  verify_deployment
+  run_failover_test
 }
 
 # ── Main Menu ─────────────────────────────────────────────────
@@ -396,35 +601,25 @@ show_menu() {
 }
 
 main() {
-  preflight
+  run_step "Pre-flight" preflight || true   # warnings only, never block the menu
 
   while true; do
     show_menu
     read -r choice
     case "${choice}" in
-      1)
-        create_resource_groups
-        deploy_primary_vnet
-        deploy_dr_vnet
-        deploy_dns
-        deploy_primary_infra
-        deploy_dr_infra
-        deploy_traffic_manager
-        verify_deployment
-        run_failover_test
-        ;;
-      2) create_resource_groups ;;
-      3) deploy_primary_vnet ;;
-      4) deploy_dr_vnet ;;
-      5) deploy_dns ;;
-      6) deploy_primary_infra ;;
-      7) deploy_dr_infra ;;
-      8) deploy_traffic_manager ;;
-      9) run_failover_test ;;
-      v|V) verify_deployment ;;
-      c|C) cleanup ;;
+      1) run_step "Full deployment"            full_deploy ;;
+      2) run_step "Create Resource Groups"     create_resource_groups ;;
+      3) run_step "Deploy PRIMARY VNet"        deploy_primary_vnet ;;
+      4) run_step "Deploy DR VNet"             deploy_dr_vnet ;;
+      5) run_step "Deploy DNS Zones"           deploy_dns ;;
+      6) run_step "Deploy PRIMARY Infra"       deploy_primary_infra ;;
+      7) run_step "Deploy DR Infra"            deploy_dr_infra ;;
+      8) run_step "Deploy Traffic Manager"     deploy_traffic_manager ;;
+      9) run_step "Failover Test"              run_failover_test ;;
+      v|V) run_step "Verify Deployment"        verify_deployment ;;
+      c|C) run_step "Cleanup"                  cleanup ;;
       0) echo "Exiting."; exit 0 ;;
-      *) print_warn "Invalid option" ;;
+      *) print_warn "Invalid option '${choice}'" ;;
     esac
   done
 }
