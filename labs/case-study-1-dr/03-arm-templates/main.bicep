@@ -1,4 +1,4 @@
-// Case Study 1 - Step 3: Core Application Infrastructure (VM, Storage, SQL)
+// Case Study 1 - Step 3: Core Application Infrastructure (VMs, LB, Storage)
 // ARM-equivalent Bicep template for rapid DR deployment
 
 @description('Azure region')
@@ -346,38 +346,6 @@ resource appVm 'Microsoft.Compute/virtualMachines@2023-03-01' = {
   }
 }
 
-// ─── Azure SQL Database ───────────────────────────────────────────────────────
-
-resource sqlServer 'Microsoft.Sql/servers@2022-05-01-preview' = {
-  name: 'sql-${prefix}-${uniqueString(resourceGroup().id)}'
-  location: location
-  tags: {
-    environment: environment
-    tier: 'database'
-  }
-  properties: {
-    administratorLogin: adminUsername
-    administratorLoginPassword: adminPassword
-    minimalTlsVersion: '1.2'
-    publicNetworkAccess: 'Disabled'
-  }
-}
-
-resource sqlDatabase 'Microsoft.Sql/servers/databases@2022-05-01-preview' = {
-  parent: sqlServer
-  name: 'db-cloudinn-${environment}'
-  location: location
-  sku: {
-    name: 'Basic'
-    tier: 'Basic'
-  }
-  properties: {
-    collation: 'SQL_Latin1_General_CP1_CI_AS'
-    maxSizeBytes: 2147483648
-    requestedBackupStorageRedundancy: 'Local'
-  }
-}
-
 // ─── Outputs ──────────────────────────────────────────────────────────────────
 
 output storageAccountName string = storageAccount.name
@@ -387,5 +355,3 @@ output lbPublicIp string = lbPip.properties.ipAddress
 output lbPublicFqdn string = lbPip.properties.dnsSettings.fqdn
 output webVmName string = webVm.name
 output appVmName string = appVm.name
-output sqlServerFqdn string = sqlServer.properties.fullyQualifiedDomainName
-output sqlDatabaseName string = sqlDatabase.name

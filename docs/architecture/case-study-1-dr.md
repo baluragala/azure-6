@@ -57,16 +57,10 @@ Both regions use the same VNet address space, subnet layout, NSG rules, and appl
          │  ┌──────────▼───────────┐    │   │  ┌────────────▼─────────────┐   │
          │  │  vm-app-prod         │    │   │  │  vm-app-prod             │   │
          │  │  Ubuntu 22.04        │    │   │  │  Ubuntu 22.04            │   │
-         │  └──────────┬───────────┘    │   │  └────────────┬─────────────┘   │
-         │             │                │   │               │                 │
-         │  subnet-db (10.0.3.0/24)     │   │  subnet-db (10.0.3.0/24)        │
-         │  NSG: Allow 5432 from app    │   │  NSG: Allow 5432 from app       │
-         │  ┌──────────▼───────────┐    │   │  ┌────────────▼─────────────┐   │
-         │  │  Azure SQL (Basic)   │    │   │  │  Azure SQL (Basic)       │   │
-         │  │  Local redundancy    │    │   │  │  Local redundancy        │   │
          │  └──────────────────────┘    │   │  └──────────────────────────┘   │
          │                              │   │                                  │
          │  Storage: Standard_LRS       │   │  Storage: Standard_LRS          │
+         │  (Blob: app-data container)  │   │  (Blob: app-data container)     │
          │                              │   │                                  │
          │  Azure DNS:                  │   │                                  │
          │  ├── Public Zone             │   │                                  │
@@ -104,8 +98,8 @@ FAILBACK (East US recovers):
 
 | Resource Group | Region | Role | Contains |
 |----------------|--------|------|---------|
-| `rg-cloudinn-primary-prod` | East US | Primary | VNet, VMs, LB, Storage, SQL, DNS zones, Traffic Manager |
-| `rg-cloudinn-dr-prod` | East US 2 | DR Standby | VNet, VMs, LB, Storage, SQL |
+| `rg-cloudinn-primary-prod` | East US | Primary | VNet, VMs, LB, Storage, DNS zones, Traffic Manager |
+| `rg-cloudinn-dr-prod` | East US 2 | DR Standby | VNet, VMs, LB, Storage |
 
 ---
 
@@ -122,7 +116,7 @@ FAILBACK (East US recovers):
 | `pip-lb-prod` | Both | Static public IP → Traffic Manager endpoint |
 | `vm-web-prod` | Both | Ubuntu 22.04 + Nginx (Standard_B2ms) |
 | `vm-app-prod` | Both | Ubuntu 22.04 (Standard_B2ms) |
-| `sql-cloudinn-prod-*` | Both | Azure SQL Basic, local redundancy |
+| `stcloudinn*` | Both | Storage Account, Standard_LRS, Blob container |
 | `stcloudinn*` | Both | Storage Account Standard_LRS |
 | `cloudinn-app.example.com` | Global | Public DNS Zone |
 | `internal.cloudinn.azure` | Global | Private DNS Zone (linked to primary VNet) |
@@ -142,7 +136,7 @@ Layer 2: VM Access
   └── VMs have no public IPs — access via Azure Cloud Shell or jump box if needed
 
 Layer 3: Data
-  ├── Azure SQL: publicNetworkAccess = Disabled, TLS 1.2 minimum
+  ├── Storage: HTTPS only, TLS 1.2 minimum, no public blob access
   └── Storage:   HTTPS only, allowBlobPublicAccess = false, encryption at rest
 
 Layer 4: DNS

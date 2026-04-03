@@ -173,7 +173,7 @@ function Deploy-PrimaryInfra {
     param([Microsoft.Azure.Commands.Network.Models.PSVirtualNetwork]$VNet)
 
     Write-Header "Step 4a: Deploy PRIMARY App Infrastructure (East US)"
-    Write-Host "  Load Balancer + Web VM (Nginx) + App VM + Storage + SQL" -ForegroundColor Gray
+    Write-Host "  Load Balancer + Web VM (Nginx) + App VM + Storage" -ForegroundColor Gray
 
     $subnets = Get-SubnetIds -VNet $VNet
     $pip = Deploy-InfraStack -ResourceGroup $RgPrimary -Location $LocationPrimary -SubnetIds $subnets -Role "primary"

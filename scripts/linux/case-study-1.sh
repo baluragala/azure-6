@@ -80,19 +80,46 @@ az_deploy() {
 
   print_step "Submitting deployment: ${label}..."
 
+  local log_file
+  log_file=$(mktemp /tmp/az_deploy_XXXXXX.log)
+
   az deployment group create \
     --resource-group "${rg}" \
     --name "${dname}" \
     --output none \
-    "$@" &>/dev/null &
+    "$@" >"${log_file}" 2>&1 &
   local cli_pid=$!
 
-  # Wait for ARM to register the deployment (retry up to 60 s)
+  # Wait for ARM to register the deployment (retry up to 90 s)
   local found=false
   local waited=0
-  while (( waited < 60 )); do
+  while (( waited < 90 )); do
     sleep 5
     waited=$(( waited + 5 ))
+
+    # If the background CLI already exited, check if deployment exists
+    if ! kill -0 "${cli_pid}" 2>/dev/null; then
+      local state
+      state=$(az deployment group show \
+        --resource-group "${rg}" \
+        --name "${dname}" \
+        --query properties.provisioningState -o tsv 2>/dev/null || echo "NotFound")
+
+      if [[ "${state}" != "NotFound" ]]; then
+        found=true
+        print_ok "${label} — accepted by ARM (state: ${state}). Polling..."
+      else
+        echo ""
+        print_error "${label} — deployment was rejected by Azure."
+        print_error "──── Azure CLI output ────"
+        cat "${log_file}" | grep -v "content for this response" || true
+        print_error "──────────────────────────"
+        rm -f "${log_file}"
+        wait "${cli_pid}" 2>/dev/null || true
+        return 1
+      fi
+      break
+    fi
 
     local state
     state=$(az deployment group show \
@@ -110,19 +137,22 @@ az_deploy() {
   done
 
   if [[ "${found}" != "true" ]]; then
-    # CLI may have exited with a real template error
-    wait "${cli_pid}" 2>/dev/null || true
     echo ""
-    print_error "${label} — deployment not found after 60 s."
-    print_error "Possible template error. Run manually for details:"
-    print_error "  az deployment group create --resource-group ${rg} --name ${dname} --template-file <template> --parameters <params> --debug"
+    print_error "${label} — deployment not registered after 90 s."
+    print_error "──── Azure CLI output ────"
+    cat "${log_file}" | grep -v "content for this response" || true
+    print_error "──────────────────────────"
+    rm -f "${log_file}"
+    kill "${cli_pid}" 2>/dev/null
+    wait "${cli_pid}" 2>/dev/null || true
     return 1
   fi
+
+  rm -f "${log_file}"
 
   _wait_deployment "${rg}" "${dname}" "${label}"
   local rc=$?
 
-  # Clean up the background CLI process (it may still be polling)
   kill "${cli_pid}" 2>/dev/null
   wait "${cli_pid}" 2>/dev/null || true
 
@@ -383,7 +413,7 @@ deploy_primary_infra() {
   echo "  ├── Web VM (Ubuntu 22.04 + Nginx) — subnet-web"
   echo "  ├── App VM (Ubuntu 22.04)          — subnet-app"
   echo "  ├── Storage Account (Standard_LRS)"
-  echo "  └── Azure SQL Database"
+  echo "  └── Blob Storage (app-data container)"
   echo ""
 
   rg_exists "${RESOURCE_GROUP_PRIMARY}" || {
