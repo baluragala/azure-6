@@ -73,12 +73,27 @@ az_deploy() {
   shift 3
 
   print_step "Starting deployment: ${label}..."
+
   az deployment group create \
     --resource-group "${rg}" \
     --name "${dname}" \
     --no-wait \
-    "$@" || return 1
+    "$@" 2>&1 || true
 
+  sleep 5
+
+  local state
+  state=$(az deployment group show \
+    --resource-group "${rg}" \
+    --name "${dname}" \
+    --query properties.provisioningState -o tsv 2>/dev/null || echo "NotFound")
+
+  if [[ "${state}" == "NotFound" ]]; then
+    print_error "${label} — deployment was not accepted by ARM. Check template errors above."
+    return 1
+  fi
+
+  print_ok "${label} — accepted by ARM (state: ${state}). Polling..."
   _wait_deployment "${rg}" "${dname}" "${label}"
 }
 
