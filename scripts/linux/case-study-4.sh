@@ -53,6 +53,79 @@ pip_exists()        { az network public-ip show --resource-group "$1" --name "$2
 dns_zone_exists()   { az network dns zone show --resource-group "$1" --name "$2"         &>/dev/null; }
 tm_profile_exists() { az network traffic-manager profile show --resource-group "$1" --name "$2" &>/dev/null; }
 
+# ── Deploy wrapper: --no-wait + manual polling ───────────────
+#
+#    "The content for this response was already consumed" is an Azure CLI
+#    SDK bug triggered when ARM's async streaming response body is read
+#    twice during long-running deployments. --output none does NOT help
+#    because the read happens inside the ARM polling layer.
+#
+#    Fix: --no-wait exits immediately after ARM accepts the request.
+#    We poll az deployment group show until the deployment reaches a
+#    terminal state (Succeeded / Failed / Canceled).
+#
+#    Usage: az_deploy "label" "resource-group" "deploy-name" \
+#                     [extra az deployment group create flags …]
+az_deploy() {
+  local label="$1"
+  local rg="$2"
+  local dname="$3"
+  shift 3
+
+  print_step "Starting deployment: ${label}..."
+  az deployment group create \
+    --resource-group "${rg}" \
+    --name "${dname}" \
+    --no-wait \
+    "$@" || return 1
+
+  _wait_deployment "${rg}" "${dname}" "${label}"
+}
+
+# ── Poll a deployment until it reaches a terminal state ──────
+_wait_deployment() {
+  local rg="$1"
+  local dname="$2"
+  local label="${3:-deployment}"
+  local timeout=1800
+  local interval=15
+  local elapsed=0
+
+  while (( elapsed < timeout )); do
+    local state
+    state=$(az deployment group show \
+      --resource-group "${rg}" \
+      --name "${dname}" \
+      --query properties.provisioningState -o tsv 2>/dev/null || echo "Unknown")
+
+    case "${state}" in
+      Succeeded)
+        echo ""
+        print_ok "${label} — Succeeded"
+        return 0
+        ;;
+      Failed|Canceled)
+        echo ""
+        print_error "${label} — ${state}"
+        az deployment group show \
+          --resource-group "${rg}" \
+          --name "${dname}" \
+          --query "properties.error" -o json 2>/dev/null || true
+        return 1
+        ;;
+      *)
+        printf "\r  ${CYAN}[WAIT]${NC} ${label}: %-10s  %3ds elapsed..." "${state}" "${elapsed}"
+        sleep "${interval}"
+        elapsed=$(( elapsed + interval ))
+        ;;
+    esac
+  done
+
+  echo ""
+  print_error "${label} timed out after ${timeout}s. Check Azure portal for status."
+  return 1
+}
+
 # ── Retry wrapper (3 attempts, exponential backoff) ──────────
 # Usage: az_retry <az subcommand and args…>
 az_retry() {
@@ -251,8 +324,8 @@ deploy_dns_zones() {
     print_ok "DNS zone '${DOMAIN_NAME}' already exists — re-deploying to reconcile records"
   fi
 
-  az_retry deployment group create \
-    --resource-group "${RG_DNS}" \
+  local _dname="deploy-dns-$(date +%Y%m%d%H%M%S)"
+  az_deploy "DNS Zones" "${RG_DNS}" "${_dname}" \
     --template-file "${LAB_DIR}/01-dns-zones/main.bicep" \
     --parameters "${LAB_DIR}/01-dns-zones/parameters.json" \
     --parameters "vnetId=${VNET_ID}" \
@@ -260,8 +333,7 @@ deploy_dns_zones() {
                  "lbPublicIp=${EAST_US_LB_IP}" \
                  "eastUsLbIp=${EAST_US_LB_IP}" \
                  "eastUs2LbIp=${EAST_US2_LB_IP}" \
-    --name "deploy-dns-$(date +%Y%m%d%H%M%S)" \
-    --output table || return 1
+    || return 1
 
   print_step "Azure Name Servers for ${DOMAIN_NAME}:"
   az network dns zone show \
@@ -355,14 +427,13 @@ deploy_traffic_manager() {
     print_ok "Traffic Manager profiles already exist — re-deploying to reconcile"
   fi
 
-  az_retry deployment group create \
-    --resource-group "${RG_DNS}" \
+  local _dname="deploy-tm-$(date +%Y%m%d%H%M%S)"
+  az_deploy "Traffic Manager" "${RG_DNS}" "${_dname}" \
     --template-file "${LAB_DIR}/02-traffic-manager/main.bicep" \
     --parameters "${LAB_DIR}/02-traffic-manager/parameters.json" \
     --parameters "eastUsPublicIpId=${US_PIP_ID}" \
                  "eastUs2PublicIpId=${DR_PIP_ID}" \
-    --name "deploy-tm-$(date +%Y%m%d%H%M%S)" \
-    --output table || return 1
+    || return 1
 
   print_step "Traffic Manager profiles:"
   az network traffic-manager profile list \
@@ -389,13 +460,12 @@ enable_dnssec() {
   print_warn "NOTE: After enabling, you MUST add the DS record to your domain registrar."
   pause
 
-  az_retry deployment group create \
-    --resource-group "${RG_DNS}" \
+  local _dname="deploy-dnssec-$(date +%Y%m%d%H%M%S)"
+  az_deploy "DNSSEC" "${RG_DNS}" "${_dname}" \
     --template-file "${LAB_DIR}/03-dnssec/main.bicep" \
     --parameters "dnsZoneName=${DOMAIN_NAME}" \
                  "dnsZoneResourceGroup=${RG_DNS}" \
-    --name "deploy-dnssec-$(date +%Y%m%d%H%M%S)" \
-    --output table 2>/dev/null || {
+    2>/dev/null || {
       print_warn "DNSSEC via Bicep requires preview API — trying Azure CLI..."
       az network dns dnssec-config create \
         --resource-group "${RG_DNS}" \

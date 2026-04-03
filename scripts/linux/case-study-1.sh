@@ -54,16 +54,78 @@ tm_profile_exists(){ az network traffic-manager profile show --resource-group "$
 dns_zone_exists()  { az network dns zone show        --resource-group "$1" --name "$2"   &>/dev/null; }
 vm_exists()        { az vm show                      --resource-group "$1" --name "$2"   &>/dev/null; }
 
-# ── Deploy wrapper: runs az deployment group create without --output table
-#    "--output table" causes "content already consumed" in Azure CLI when
-#    ARM returns an async polling response. Use --output none + post-query.
+# ── Deploy wrapper: --no-wait + manual polling
+#
+#    "The content for this response was already consumed" is an Azure CLI
+#    SDK bug triggered when ARM's async streaming response body is read
+#    twice during long-running deployments. --output none does NOT help
+#    because the read happens inside the ARM polling layer, not the
+#    output renderer.
+#
+#    Fix: --no-wait exits immediately after ARM accepts the request (no
+#    streaming body). We then poll az deployment group show until the
+#    deployment reaches a terminal state (Succeeded / Failed / Canceled).
+#
+#    Usage: az_deploy "label" "resource-group" "deploy-name" \
+#                     [extra az deployment group create flags …]
 az_deploy() {
-  local deploy_name="${1}"; shift    # first arg is the deployment name label for logging
-  print_step "Deploying: ${deploy_name} (this may take several minutes)..."
+  local label="$1"
+  local rg="$2"
+  local dname="$3"
+  shift 3
+
+  print_step "Starting deployment: ${label}..."
   az deployment group create \
-    --output none \
+    --resource-group "${rg}" \
+    --name "${dname}" \
+    --no-wait \
     "$@" || return 1
-  print_ok "Deployment complete: ${deploy_name}"
+
+  _wait_deployment "${rg}" "${dname}" "${label}"
+}
+
+# ── Poll a deployment until it reaches a terminal state ──────
+_wait_deployment() {
+  local rg="$1"
+  local dname="$2"
+  local label="${3:-deployment}"
+  local timeout=1800   # 30 min max
+  local interval=15
+  local elapsed=0
+
+  while (( elapsed < timeout )); do
+    local state
+    state=$(az deployment group show \
+      --resource-group "${rg}" \
+      --name "${dname}" \
+      --query properties.provisioningState -o tsv 2>/dev/null || echo "Unknown")
+
+    case "${state}" in
+      Succeeded)
+        echo ""
+        print_ok "${label} — Succeeded"
+        return 0
+        ;;
+      Failed|Canceled)
+        echo ""
+        print_error "${label} — ${state}"
+        az deployment group show \
+          --resource-group "${rg}" \
+          --name "${dname}" \
+          --query "properties.error" -o json 2>/dev/null || true
+        return 1
+        ;;
+      *)
+        printf "\r  ${CYAN}[WAIT]${NC} ${label}: %-10s  %3ds elapsed..." "${state}" "${elapsed}"
+        sleep "${interval}"
+        elapsed=$(( elapsed + interval ))
+        ;;
+    esac
+  done
+
+  echo ""
+  print_error "${label} timed out after ${timeout}s. Check Azure portal for status."
+  return 1
 }
 
 # ── Retry wrapper (3 attempts, exponential backoff) ──────────
@@ -180,11 +242,11 @@ deploy_primary_vnet() {
   if vnet_exists "${RESOURCE_GROUP_PRIMARY}" "${VNET_NAME}"; then
     print_ok "Primary VNet '${VNET_NAME}' already exists — skipping deployment"
   else
-    az_deploy "Primary VNet" \
-      --resource-group "${RESOURCE_GROUP_PRIMARY}" \
+    local _dname="deploy-vnet-primary-$(date +%Y%m%d%H%M%S)"
+    az_deploy "Primary VNet" "${RESOURCE_GROUP_PRIMARY}" "${_dname}" \
       --template-file "${LAB_DIR}/01-vnet/main.bicep" \
       --parameters location="${LOCATION_PRIMARY}" environment="${ENVIRONMENT}" companyPrefix="${COMPANY_PREFIX}" \
-      --name "deploy-vnet-primary-$(date +%Y%m%d%H%M%S)" || return 1
+      || return 1
   fi
 
   PRIMARY_VNET_ID=$(az network vnet show \
@@ -210,11 +272,11 @@ deploy_dr_vnet() {
   if vnet_exists "${RESOURCE_GROUP_DR}" "${VNET_NAME}"; then
     print_ok "DR VNet '${VNET_NAME}' already exists — skipping deployment"
   else
-    az_deploy "DR VNet" \
-      --resource-group "${RESOURCE_GROUP_DR}" \
+    local _dname="deploy-vnet-dr-$(date +%Y%m%d%H%M%S)"
+    az_deploy "DR VNet" "${RESOURCE_GROUP_DR}" "${_dname}" \
       --template-file "${LAB_DIR}/01-vnet/main.bicep" \
       --parameters location="${LOCATION_DR}" environment="${ENVIRONMENT}" companyPrefix="${COMPANY_PREFIX}" \
-      --name "deploy-vnet-dr-$(date +%Y%m%d%H%M%S)" || return 1
+      || return 1
   fi
 
   DR_VNET_ID=$(az network vnet show \
@@ -249,14 +311,14 @@ deploy_dns() {
     print_ok "DNS zones already exist — re-deploying to reconcile records"
   fi
 
-  az_deploy "DNS Zones" \
-    --resource-group "${RESOURCE_GROUP_PRIMARY}" \
+  local _dname="deploy-dns-$(date +%Y%m%d%H%M%S)"
+  az_deploy "DNS Zones" "${RESOURCE_GROUP_PRIMARY}" "${_dname}" \
     --template-file "${LAB_DIR}/02-dns/main.bicep" \
     --parameters "${LAB_DIR}/02-dns/parameters.json" \
     --parameters "vnetId=${PRIMARY_VNET_ID}" \
                  "publicDnsZoneName=${COMPANY_PREFIX}-app.example.com" \
                  "privateDnsZoneName=internal.${COMPANY_PREFIX}.azure" \
-    --name "deploy-dns-$(date +%Y%m%d%H%M%S)" || return 1
+    || return 1
 
   print_step "Azure DNS Name Servers (add to your domain registrar):"
   az network dns zone show \
@@ -382,14 +444,13 @@ _deploy_infra() {
   print_warn "VM password: ${VM_PASSWORD:0:4}***  (export CS1_VM_PASSWORD=<pass> to override)"
   print_warn "IMPORTANT: Change this password before any non-lab use."
 
-  az_deploy "Infra stack (${role})" \
-    --resource-group "${rg}" \
+  local _dname="deploy-infra-${role}-$(date +%Y%m%d%H%M%S)"
+  az_deploy "Infra stack (${role})" "${rg}" "${_dname}" \
     --template-file "${LAB_DIR}/03-arm-templates/main.bicep" \
     --parameters "location=${location}" \
                  "subnetWebId=${SUBNET_WEB_ID}" \
                  "subnetAppId=${SUBNET_APP_ID}" \
-                 "adminPassword=${VM_PASSWORD}" \
-    --name "deploy-infra-${role}-$(date +%Y%m%d%H%M%S)"
+                 "adminPassword=${VM_PASSWORD}"
 }
 
 # ── Step 5: Deploy Traffic Manager ───────────────────────────
@@ -424,14 +485,14 @@ deploy_traffic_manager() {
     print_ok "Traffic Manager profile already exists — re-deploying to reconcile"
   fi
 
-  az_deploy "Traffic Manager" \
-    --resource-group "${RESOURCE_GROUP_PRIMARY}" \
+  local _dname="deploy-tm-$(date +%Y%m%d%H%M%S)"
+  az_deploy "Traffic Manager" "${RESOURCE_GROUP_PRIMARY}" "${_dname}" \
     --template-file "${LAB_DIR}/04-traffic-manager/main.bicep" \
     --parameters "companyPrefix=${COMPANY_PREFIX}" \
                  "primaryPublicIpId=${PRIMARY_LB_PIP_ID}" \
                  "drPublicIpId=${DR_LB_PIP_ID}" \
                  "dnsTtl=30" \
-    --name "deploy-tm-$(date +%Y%m%d%H%M%S)" || return 1
+    || return 1
 
   TM_FQDN=$(az network traffic-manager profile show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
