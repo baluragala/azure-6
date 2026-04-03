@@ -353,18 +353,12 @@ _deploy_infra() {
   local location="$2"
   local role="$3"
 
-  # Prompt for password securely — never store in plain text
-  local VM_PASSWORD="${CS1_VM_PASSWORD:-}"
-  if [[ -z "${VM_PASSWORD}" ]]; then
-    print_warn "Set CS1_VM_PASSWORD env var to skip this prompt."
-    echo -n "  Enter VM admin password (min 12 chars, mix of upper/lower/digit/symbol): "
-    read -rs VM_PASSWORD
-    echo ""
-  fi
-  if [[ ${#VM_PASSWORD} -lt 12 ]]; then
-    print_error "Password must be at least 12 characters."
-    return 1
-  fi
+  # Training default password — override with CS1_VM_PASSWORD env var for real deployments.
+  # Azure password requirements: 12+ chars, upper + lower + digit + symbol.
+  local DEFAULT_PASSWORD="AzureLab@Train24!"
+  local VM_PASSWORD="${CS1_VM_PASSWORD:-${DEFAULT_PASSWORD}}"
+  print_warn "VM password: using ${VM_PASSWORD:0:4}***  (set CS1_VM_PASSWORD env var to override)"
+  print_warn "IMPORTANT: Change this password before any non-lab use."
 
   az_retry deployment group create \
     --resource-group "${rg}" \
