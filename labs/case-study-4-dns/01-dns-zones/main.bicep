@@ -1,5 +1,6 @@
-// Case Study 4 - Step 1: DNS Zones for ShopEasy global e-commerce
+// Case Study 4 - Step 1: DNS Zones for ShopEasy e-commerce
 // Deploys public and private DNS zones with multi-tier resolution
+// Regions: East US (primary) and East US 2 (DR/secondary) only
 
 @description('Your public domain name (must be registered)')
 param domainName string = 'shopeasy.example.com'
@@ -10,20 +11,17 @@ param environment string = 'prod'
 @description('VNet ID for private DNS zone linking')
 param vnetId string
 
-@description('VNet ID for internal corporate VNet (Europe region)')
-param internalVnetId string = ''
+@description('VNet ID for East US 2 VNet (optional secondary link)')
+param eastUs2VnetId string = ''
 
-@description('Load balancer IP for main website')
+@description('Load balancer IP for main website (East US)')
 param lbPublicIp string
 
-@description('IP of East US app servers')
+@description('IP of East US app servers (primary)')
 param eastUsLbIp string = '20.10.5.100'
 
-@description('IP of West Europe app servers')
-param westEuropeLbIp string = '52.174.5.200'
-
-@description('IP of Southeast Asia app servers')
-param seAsiaLbIp string = '20.195.10.50'
+@description('IP of East US 2 app servers (DR / secondary)')
+param eastUs2LbIp string = '20.40.5.100'
 
 // ─── Public DNS Zone (internet-facing) ───────────────────────────────────────
 
@@ -40,7 +38,7 @@ resource publicZone 'Microsoft.Network/dnsZones@2018-05-01' = {
   }
 }
 
-// Apex domain → Load balancer
+// Apex domain → Load balancer (East US primary)
 resource apexRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
   parent: publicZone
   name: '@'
@@ -54,7 +52,7 @@ resource apexRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
   }
 }
 
-// www subdomain
+// www subdomain → primary region
 resource wwwRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
   parent: publicZone
   name: 'www'
@@ -68,7 +66,7 @@ resource wwwRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
   }
 }
 
-// US regional subdomain
+// East US primary subdomain
 resource usRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
   parent: publicZone
   name: 'us'
@@ -82,29 +80,15 @@ resource usRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
   }
 }
 
-// EU regional subdomain
-resource euRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
+// East US 2 DR subdomain (secondary endpoint)
+resource drRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
   parent: publicZone
-  name: 'eu'
+  name: 'dr'
   properties: {
     TTL: 60
     ARecords: [
       {
-        ipv4Address: westEuropeLbIp
-      }
-    ]
-  }
-}
-
-// APAC regional subdomain
-resource apacRecord 'Microsoft.Network/dnsZones/A@2018-05-01' = {
-  parent: publicZone
-  name: 'ap'
-  properties: {
-    TTL: 60
-    ARecords: [
-      {
-        ipv4Address: seAsiaLbIp
+        ipv4Address: eastUs2LbIp
       }
     ]
   }
@@ -218,10 +202,10 @@ resource privateZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
   }
 }
 
-// Link to Azure VNet
+// Link to primary VNet (East US)
 resource vnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
   parent: privateZone
-  name: 'link-shopeasy-vnet'
+  name: 'link-shopeasy-vnet-eastus'
   location: 'global'
   properties: {
     virtualNetwork: {
@@ -231,14 +215,14 @@ resource vnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06
   }
 }
 
-// Link internal VNet if provided
-resource internalVnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (!empty(internalVnetId)) {
+// Link to East US 2 VNet if provided
+resource eastUs2VnetLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = if (!empty(eastUs2VnetId)) {
   parent: privateZone
-  name: 'link-shopeasy-internal-vnet'
+  name: 'link-shopeasy-vnet-eastus2'
   location: 'global'
   properties: {
     virtualNetwork: {
-      id: internalVnetId
+      id: eastUs2VnetId
     }
     registrationEnabled: false
   }

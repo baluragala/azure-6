@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 # ============================================================
 # Case Study 4: Scalable and Secure DNS Management
-# Global Enterprise DNS for ShopEasy e-commerce
+# Dual-region DNS for ShopEasy e-commerce
+# Regions: East US (primary) | East US 2 (DR / secondary)
 # Windows PowerShell Version
 # ============================================================
 
@@ -22,18 +23,15 @@ function Pause-ForContinue { Write-Host "Press ENTER to continue..." -Foreground
 # ── Configuration ─────────────────────────────────────────────
 $Company        = "shopeasy"
 $LocationUS     = "eastus"
-$LocationEU     = "westeurope"
-$LocationAP     = "southeastasia"
+$LocationDR     = "eastus2"
 $DomainName     = "shopeasy.example.com"
 $RgDns          = "rg-$Company-dns"
 $RgUS           = "rg-$Company-us"
-$RgEU           = "rg-$Company-eu"
-$RgAP           = "rg-$Company-ap"
+$RgDR           = "rg-$Company-eastus2"
 $LabDir         = Join-Path (Split-Path $PSScriptRoot -Parent) "labs\case-study-4-dns"
 
 $EastUsLbIp     = "20.10.5.100"
-$WestEuropeLbIp = "52.174.5.200"
-$SeAsiaLbIp     = "20.195.10.50"
+$EastUs2LbIp    = "20.40.5.100"
 
 # ── Pre-flight ────────────────────────────────────────────────
 function Invoke-Preflight {
@@ -51,12 +49,16 @@ function Invoke-Preflight {
 # ── Step 1: Create Resource Groups ───────────────────────────
 function New-LabResourceGroups {
     Write-Header "Step 1: Create Resource Groups"
+    Write-Host ""
+    Write-Host "  rg-shopeasy-dns     → $LocationUS  (DNS zones + Traffic Manager)" -ForegroundColor Gray
+    Write-Host "  rg-shopeasy-us      → $LocationUS  (East US primary endpoint)" -ForegroundColor Gray
+    Write-Host "  rg-shopeasy-eastus2 → $LocationDR (East US 2 DR endpoint)" -ForegroundColor Gray
+    Write-Host ""
 
     $groups = @(
         @{ Name = $RgDns; Location = $LocationUS },
         @{ Name = $RgUS;  Location = $LocationUS },
-        @{ Name = $RgEU;  Location = $LocationEU },
-        @{ Name = $RgAP;  Location = $LocationAP }
+        @{ Name = $RgDR;  Location = $LocationDR }
     )
 
     foreach ($g in $groups) {
@@ -68,45 +70,56 @@ function New-LabResourceGroups {
     }
 }
 
-# ── Step 2: Create VNet ───────────────────────────────────────
-function New-LabVNet {
-    Write-Header "Step 2: Create VNet for Private DNS Linking"
+# ── Step 2: Create VNets ──────────────────────────────────────
+function New-LabVNets {
+    Write-Header "Step 2: Create VNets for Private DNS Linking"
 
-    $subnetConfig = New-AzVirtualNetworkSubnetConfig `
-        -Name "subnet-app" `
-        -AddressPrefix "10.0.1.0/24"
-
-    $vnet = New-AzVirtualNetwork `
+    Write-Step "Creating VNet in East US ($RgUS)..."
+    $subnetUS = New-AzVirtualNetworkSubnetConfig -Name "subnet-app" -AddressPrefix "10.0.1.0/24"
+    $vnetUS = New-AzVirtualNetwork `
         -ResourceGroupName $RgUS `
         -Location $LocationUS `
         -Name "vnet-$Company-prod" `
         -AddressPrefix "10.0.0.0/16" `
-        -Subnet $subnetConfig
+        -Subnet $subnetUS
+    Write-Ok "East US VNet: $($vnetUS.Id)"
 
-    Write-Ok "VNet created: $($vnet.Id)"
-    return $vnet
+    Write-Step "Creating VNet in East US 2 ($RgDR)..."
+    $subnetDR = New-AzVirtualNetworkSubnetConfig -Name "subnet-app" -AddressPrefix "10.0.1.0/24"
+    $vnetDR = New-AzVirtualNetwork `
+        -ResourceGroupName $RgDR `
+        -Location $LocationDR `
+        -Name "vnet-$Company-dr" `
+        -AddressPrefix "10.0.0.0/16" `
+        -Subnet $subnetDR
+    Write-Ok "East US 2 VNet: $($vnetDR.Id)"
+
+    return @{ US = $vnetUS; DR = $vnetDR }
 }
 
 # ── Step 3: Deploy DNS Zones ──────────────────────────────────
 function Deploy-DnsZones {
-    param([string]$VNetId)
+    param([string]$VNetId, [string]$VNetDrId = "")
 
     Write-Header "Step 3: Deploy Public & Private DNS Zones"
-    Write-Host "  Public: $DomainName" -ForegroundColor Gray
+    Write-Host "  Public:  $DomainName" -ForegroundColor Gray
     Write-Host "  Private: corp.$Company.internal" -ForegroundColor Gray
 
     $deployName = "deploy-dns-$(Get-Date -Format 'yyyyMMddHHmmss')"
 
-    New-AzResourceGroupDeployment `
-        -ResourceGroupName $RgDns `
-        -Name $deployName `
-        -TemplateFile "$LabDir\01-dns-zones\main.bicep" `
-        -TemplateParameterFile "$LabDir\01-dns-zones\parameters.json" `
-        -vnetId $VNetId `
-        -lbPublicIp $EastUsLbIp `
-        -eastUsLbIp $EastUsLbIp `
-        -westEuropeLbIp $WestEuropeLbIp `
-        -seAsiaLbIp $SeAsiaLbIp
+    $params = @{
+        ResourceGroupName      = $RgDns
+        Name                   = $deployName
+        TemplateFile           = "$LabDir\01-dns-zones\main.bicep"
+        TemplateParameterFile  = "$LabDir\01-dns-zones\parameters.json"
+        vnetId                 = $VNetId
+        lbPublicIp             = $EastUsLbIp
+        eastUsLbIp             = $EastUsLbIp
+        eastUs2LbIp            = $EastUs2LbIp
+    }
+    if ($VNetDrId) { $params["eastUs2VnetId"] = $VNetDrId }
+
+    New-AzResourceGroupDeployment @params
 
     Write-Step "Azure Name Servers (add to domain registrar):"
     $zone = Get-AzDnsZone -ResourceGroupName $RgDns -Name $DomainName
@@ -121,9 +134,8 @@ function New-RegionalPublicIPs {
     Write-Header "Step 4: Create Regional Public IP Addresses"
 
     $pipConfigs = @(
-        @{ RG = $RgUS; Name = "pip-lb-us-prod"; Location = $LocationUS },
-        @{ RG = $RgEU; Name = "pip-lb-eu-prod"; Location = $LocationEU },
-        @{ RG = $RgAP; Name = "pip-lb-ap-prod"; Location = $LocationAP }
+        @{ RG = $RgUS; Name = "pip-lb-us-prod";      Location = $LocationUS },
+        @{ RG = $RgDR; Name = "pip-lb-eastus2-prod"; Location = $LocationDR }
     )
 
     $pips = @{}
@@ -147,13 +159,12 @@ function Deploy-TrafficManager {
     param([hashtable]$Pips)
 
     Write-Header "Step 5: Deploy Traffic Manager Profiles"
-    Write-Host "  1. Geographic routing (by region)" -ForegroundColor Gray
-    Write-Host "  2. Performance routing (by latency)" -ForegroundColor Gray
-    Write-Host "  3. Priority failover" -ForegroundColor Gray
+    Write-Host "  1. Geographic routing  (NA/SA → East US | WORLD → East US 2)" -ForegroundColor Gray
+    Write-Host "  2. Performance routing (lowest latency between East US and East US 2)" -ForegroundColor Gray
+    Write-Host "  3. Priority failover   (East US P1 → East US 2 P2)" -ForegroundColor Gray
 
     $usPipId = $Pips["pip-lb-us-prod"].Id
-    $euPipId = $Pips["pip-lb-eu-prod"].Id
-    $apPipId = $Pips["pip-lb-ap-prod"].Id
+    $drPipId = $Pips["pip-lb-eastus2-prod"].Id
 
     $deployName = "deploy-tm-$(Get-Date -Format 'yyyyMMddHHmmss')"
 
@@ -163,8 +174,7 @@ function Deploy-TrafficManager {
         -TemplateFile "$LabDir\02-traffic-manager\main.bicep" `
         -TemplateParameterFile "$LabDir\02-traffic-manager\parameters.json" `
         -eastUsPublicIpId $usPipId `
-        -westEuropePublicIpId $euPipId `
-        -seAsiaPublicIpId $apPipId
+        -eastUs2PublicIpId $drPipId
 
     Write-Step "Traffic Manager profiles:"
     Get-AzTrafficManagerProfile -ResourceGroupName $RgDns |
@@ -179,7 +189,6 @@ function Enable-DnsSec {
     Write-Warn "DNSSEC protects $DomainName against spoofing attacks."
     Pause-ForContinue
 
-    # Azure CLI is the most reliable way for DNSSEC (Az module support varies)
     Write-Step "Enabling DNSSEC via Azure CLI..."
     $result = az network dns dnssec-config create `
         --resource-group $RgDns `
@@ -207,7 +216,7 @@ function Invoke-DnsFailureSimulation {
     Write-Header "Step 7: DNS Failure Simulation & Automatic Recovery"
     Write-Host ""
     Write-Host "  Simulating East US regional failure..." -ForegroundColor Gray
-    Write-Host "  Traffic should auto-route to West Europe." -ForegroundColor Gray
+    Write-Host "  Traffic should auto-route to East US 2." -ForegroundColor Gray
     Write-Host ""
     Pause-ForContinue
 
@@ -218,7 +227,7 @@ function Invoke-DnsFailureSimulation {
         Write-Step "Current DNS resolution (East US should be primary):"
         Resolve-DnsName -Name $tmFqdn -ErrorAction SilentlyContinue | Select-Object Name, IPAddress | Format-Table
 
-        Write-Step "Disabling East US endpoint..."
+        Write-Step "Disabling East US endpoint (simulating regional failure)..."
         $ep = Get-AzTrafficManagerEndpoint `
             -Name "primary-east-us" `
             -ProfileName "tm-$Company-failover" `
@@ -235,7 +244,7 @@ function Invoke-DnsFailureSimulation {
         }
         Write-Progress -Completed -Activity "Done"
 
-        Write-Step "DNS after failure (expect West Europe IP):"
+        Write-Step "DNS after failure (expect East US 2 IP):"
         Resolve-DnsName -Name $tmFqdn -ErrorAction SilentlyContinue | Select-Object Name, IPAddress | Format-Table
 
         Pause-ForContinue
@@ -266,6 +275,12 @@ function Show-DnsQueryDemos {
     Write-Step "Resolve www.$DomainName (via PowerShell):"
     Resolve-DnsName -Name "www.$DomainName" -ErrorAction SilentlyContinue
 
+    Write-Step "Resolve regional subdomains:"
+    Write-Host "  us.$DomainName  → East US primary" -ForegroundColor Gray
+    Resolve-DnsName -Name "us.$DomainName"  -ErrorAction SilentlyContinue | Select-Object Name, IPAddress
+    Write-Host "  dr.$DomainName  → East US 2 DR" -ForegroundColor Gray
+    Resolve-DnsName -Name "dr.$DomainName"  -ErrorAction SilentlyContinue | Select-Object Name, IPAddress
+
     Write-Step "Resolve MX records:"
     Resolve-DnsName -Name $DomainName -Type MX -ErrorAction SilentlyContinue
 
@@ -290,9 +305,14 @@ function Remove-LabResources {
     Write-Warn "This will delete ALL resource groups!"
     $confirm = Read-Host "Type 'yes' to confirm"
     if ($confirm -eq "yes") {
-        foreach ($rg in @($RgDns, $RgUS, $RgEU, $RgAP)) {
-            Remove-AzResourceGroup -Name $rg -Force -AsJob -ErrorAction SilentlyContinue
-            Write-Ok "Deleting $rg..."
+        foreach ($rg in @($RgDns, $RgUS, $RgDR)) {
+            $exists = Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue
+            if ($exists) {
+                Remove-AzResourceGroup -Name $rg -Force -AsJob | Out-Null
+                Write-Ok "Deleting $rg..."
+            } else {
+                Write-Warn "$rg does not exist, skipping."
+            }
         }
     }
     else {
@@ -305,10 +325,11 @@ function Show-Menu {
     Write-Host ""
     Write-Host "╔══════════════════════════════════════════════════╗" -ForegroundColor Blue
     Write-Host "║  Case Study 4: Global DNS Management Lab        ║" -ForegroundColor Blue
+    Write-Host "║  Regions: East US (primary) | East US 2 (DR)   ║" -ForegroundColor Blue
     Write-Host "╠══════════════════════════════════════════════════╣" -ForegroundColor Blue
     Write-Host "║  1) Run full deployment (all steps)             ║" -ForegroundColor Blue
     Write-Host "║  2) Step 1: Create Resource Groups              ║" -ForegroundColor Blue
-    Write-Host "║  3) Step 2: Create VNet                         ║" -ForegroundColor Blue
+    Write-Host "║  3) Step 2: Create VNets                        ║" -ForegroundColor Blue
     Write-Host "║  4) Step 3: Deploy DNS Zones                    ║" -ForegroundColor Blue
     Write-Host "║  5) Step 4: Create Regional IPs                 ║" -ForegroundColor Blue
     Write-Host "║  6) Step 5: Deploy Traffic Manager              ║" -ForegroundColor Blue
@@ -324,16 +345,16 @@ function Show-Menu {
 # ── Entry Point ───────────────────────────────────────────────
 Invoke-Preflight
 
-$vnet = $null
-$pips = @{}
+$vnets = @{}
+$pips  = @{}
 
 while ($true) {
     $choice = Show-Menu
     switch ($choice) {
         "1" {
             New-LabResourceGroups
-            $vnet = New-LabVNet
-            Deploy-DnsZones -VNetId $vnet.Id
+            $vnets = New-LabVNets
+            Deploy-DnsZones -VNetId $vnets.US.Id -VNetDrId $vnets.DR.Id
             $pips = New-RegionalPublicIPs
             Deploy-TrafficManager -Pips $pips
             Enable-DnsSec
@@ -341,20 +362,24 @@ while ($true) {
             Invoke-DnsFailureSimulation
         }
         "2" { New-LabResourceGroups }
-        "3" { $vnet = New-LabVNet }
+        "3" { $vnets = New-LabVNets }
         "4" {
-            if (-not $vnet) {
-                $vnet = Get-AzVirtualNetwork -ResourceGroupName $RgUS -Name "vnet-$Company-prod" -ErrorAction SilentlyContinue
+            if (-not $vnets.US) {
+                $vnetUS = Get-AzVirtualNetwork -ResourceGroupName $RgUS -Name "vnet-$Company-prod" -ErrorAction SilentlyContinue
+                $vnetDR = Get-AzVirtualNetwork -ResourceGroupName $RgDR -Name "vnet-$Company-dr" -ErrorAction SilentlyContinue
+                $vnets = @{ US = $vnetUS; DR = $vnetDR }
             }
-            if ($vnet) { Deploy-DnsZones -VNetId $vnet.Id } else { Write-Warn "Create VNet first (option 3)" }
+            if ($vnets.US) {
+                $drId = if ($vnets.DR) { $vnets.DR.Id } else { "" }
+                Deploy-DnsZones -VNetId $vnets.US.Id -VNetDrId $drId
+            } else { Write-Warn "Create VNets first (option 3)" }
         }
         "5" { $pips = New-RegionalPublicIPs }
         "6" {
             if ($pips.Count -eq 0) {
                 $pips = @{
-                    "pip-lb-us-prod" = (Get-AzPublicIpAddress -ResourceGroupName $RgUS -Name "pip-lb-us-prod" -ErrorAction SilentlyContinue)
-                    "pip-lb-eu-prod" = (Get-AzPublicIpAddress -ResourceGroupName $RgEU -Name "pip-lb-eu-prod" -ErrorAction SilentlyContinue)
-                    "pip-lb-ap-prod" = (Get-AzPublicIpAddress -ResourceGroupName $RgAP -Name "pip-lb-ap-prod" -ErrorAction SilentlyContinue)
+                    "pip-lb-us-prod"      = (Get-AzPublicIpAddress -ResourceGroupName $RgUS -Name "pip-lb-us-prod"      -ErrorAction SilentlyContinue)
+                    "pip-lb-eastus2-prod" = (Get-AzPublicIpAddress -ResourceGroupName $RgDR -Name "pip-lb-eastus2-prod" -ErrorAction SilentlyContinue)
                 }
             }
             if ($pips["pip-lb-us-prod"]) { Deploy-TrafficManager -Pips $pips } else { Write-Warn "Create regional IPs first (option 5)" }

@@ -1,17 +1,16 @@
 // Case Study 4 - Step 2: Traffic Manager with Geographic and Performance Routing
-// Implements geo-based DNS routing for global ShopEasy e-commerce
+// Implements DNS routing for ShopEasy e-commerce across two allowed Azure regions:
+//   - East US   (primary)
+//   - East US 2 (DR / secondary)
 
 @description('Domain name prefix for Traffic Manager')
 param companyPrefix string = 'shopeasy'
 
-@description('East US load balancer resource ID')
+@description('East US load balancer resource ID (primary)')
 param eastUsPublicIpId string
 
-@description('West Europe load balancer resource ID')
-param westEuropePublicIpId string
-
-@description('Southeast Asia load balancer resource ID')
-param seAsiaPublicIpId string
+@description('East US 2 load balancer resource ID (DR / secondary)')
+param eastUs2PublicIpId string
 
 @description('DNS TTL in seconds')
 @minValue(10)
@@ -19,7 +18,9 @@ param seAsiaPublicIpId string
 param dnsTtl int = 60
 
 // ─── Geographic Routing Profile ───────────────────────────────────────────────
-// Routes users to their nearest regional endpoint based on location
+// Routes users based on geography. With two endpoints:
+//   - East US  : North/South America (nearest region)
+//   - East US 2: WORLD (all other regions — Europe, Asia, etc.)
 
 resource tmGeoProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
   name: 'tm-${companyPrefix}-geo'
@@ -50,26 +51,18 @@ resource tmGeoProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
         properties: {
           targetResourceId: eastUsPublicIpId
           endpointStatus: 'Enabled'
-          // WORLD covers any unmatched regions (acts as fallback)
+          // North + South America → East US
           geoMapping: ['GEO-NA', 'GEO-SA']
         }
       }
       {
-        name: 'endpoint-west-europe'
+        name: 'endpoint-east-us2'
         type: 'Microsoft.Network/trafficManagerProfiles/azureEndpoints'
         properties: {
-          targetResourceId: westEuropePublicIpId
+          targetResourceId: eastUs2PublicIpId
           endpointStatus: 'Enabled'
-          geoMapping: ['GEO-EU', 'GEO-AF', 'GEO-ME']
-        }
-      }
-      {
-        name: 'endpoint-sea'
-        type: 'Microsoft.Network/trafficManagerProfiles/azureEndpoints'
-        properties: {
-          targetResourceId: seAsiaPublicIpId
-          endpointStatus: 'Enabled'
-          geoMapping: ['GEO-AP']
+          // WORLD = all unmatched regions (Europe, Asia, Africa, etc.)
+          geoMapping: ['WORLD']
         }
       }
     ]
@@ -77,7 +70,7 @@ resource tmGeoProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
 }
 
 // ─── Performance Routing Profile ──────────────────────────────────────────────
-// Routes users to the lowest-latency endpoint (independently of geography)
+// Routes users to the lowest-latency endpoint (measured in real-time by Azure)
 
 resource tmPerfProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
   name: 'tm-${companyPrefix}-perf'
@@ -111,18 +104,10 @@ resource tmPerfProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
         }
       }
       {
-        name: 'endpoint-west-europe'
+        name: 'endpoint-east-us2'
         type: 'Microsoft.Network/trafficManagerProfiles/azureEndpoints'
         properties: {
-          targetResourceId: westEuropePublicIpId
-          endpointStatus: 'Enabled'
-        }
-      }
-      {
-        name: 'endpoint-sea'
-        type: 'Microsoft.Network/trafficManagerProfiles/azureEndpoints'
-        properties: {
-          targetResourceId: seAsiaPublicIpId
+          targetResourceId: eastUs2PublicIpId
           endpointStatus: 'Enabled'
         }
       }
@@ -130,8 +115,9 @@ resource tmPerfProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
   }
 }
 
-// ─── Nested Profile: Priority Failover within each region ─────────────────────
-// East US primary → West Europe secondary (if entire US region goes down)
+// ─── Priority Failover Profile ────────────────────────────────────────────────
+// East US primary (P1) → East US 2 DR standby (P2)
+// Mirrors the DR strategy from Case Study 1
 
 resource tmFailoverProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
   name: 'tm-${companyPrefix}-failover'
@@ -165,21 +151,12 @@ resource tmFailoverProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01'
         }
       }
       {
-        name: 'fallback-west-europe'
+        name: 'fallback-east-us2'
         type: 'Microsoft.Network/trafficManagerProfiles/azureEndpoints'
         properties: {
-          targetResourceId: westEuropePublicIpId
+          targetResourceId: eastUs2PublicIpId
           endpointStatus: 'Enabled'
           priority: 2
-        }
-      }
-      {
-        name: 'fallback-sea'
-        type: 'Microsoft.Network/trafficManagerProfiles/azureEndpoints'
-        properties: {
-          targetResourceId: seAsiaPublicIpId
-          endpointStatus: 'Enabled'
-          priority: 3
         }
       }
     ]
@@ -193,11 +170,11 @@ output perfProfileFqdn string = tmPerfProfile.properties.dnsConfig.fqdn
 output failoverProfileFqdn string = tmFailoverProfile.properties.dnsConfig.fqdn
 
 output testInstructions object = {
-  geoRouting: 'nslookup ${tmGeoProfile.properties.dnsConfig.fqdn} - routes by geography'
-  perfRouting: 'nslookup ${tmPerfProfile.properties.dnsConfig.fqdn} - routes by latency'
+  geoRouting: 'nslookup ${tmGeoProfile.properties.dnsConfig.fqdn} - routes by geography (NA/SA → East US, WORLD → East US 2)'
+  perfRouting: 'nslookup ${tmPerfProfile.properties.dnsConfig.fqdn} - routes to lowest-latency endpoint'
   failoverTest: [
     'Step 1: Disable East US endpoint in tm-${companyPrefix}-failover'
-    'Step 2: nslookup ${tmFailoverProfile.properties.dnsConfig.fqdn} → should return Europe IP'
+    'Step 2: nslookup ${tmFailoverProfile.properties.dnsConfig.fqdn} → should return East US 2 IP'
     'Step 3: Re-enable East US endpoint'
     'Step 4: nslookup again → should return East US IP'
   ]

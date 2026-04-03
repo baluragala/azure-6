@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================
 # Case Study 4: Scalable and Secure DNS Management
-# Global Enterprise DNS for ShopEasy e-commerce
+# Dual-region DNS for ShopEasy e-commerce
+# Regions: East US (primary) | East US 2 (DR / secondary)
 # ============================================================
 
 set -euo pipefail
@@ -20,21 +21,18 @@ pause()        { echo -e "${YELLOW}Press ENTER to continue...${NC}"; read -r; }
 # ── Configuration ─────────────────────────────────────────────
 COMPANY="shopeasy"
 LOCATION_US="eastus"
-LOCATION_EU="westeurope"
-LOCATION_AP="southeastasia"
+LOCATION_DR="eastus2"
 DOMAIN_NAME="shopeasy.example.com"
 
 RG_DNS="rg-${COMPANY}-dns"
 RG_US="rg-${COMPANY}-us"
-RG_EU="rg-${COMPANY}-eu"
-RG_AP="rg-${COMPANY}-ap"
+RG_DR="rg-${COMPANY}-eastus2"
 
 LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/labs/case-study-4-dns"
 
-# Placeholder IPs (replace with real IPs from your infra)
+# Placeholder IPs (replaced by real IPs after public IP creation)
 EAST_US_LB_IP="20.10.5.100"
-WEST_EUROPE_LB_IP="52.174.5.200"
-SE_ASIA_LB_IP="20.195.10.50"
+EAST_US2_LB_IP="20.40.5.100"
 
 # ── Pre-flight checks ─────────────────────────────────────────
 preflight() {
@@ -48,8 +46,13 @@ preflight() {
 # ── Step 1: Create Resource Groups ───────────────────────────
 create_resource_groups() {
   print_header "Step 1: Create Resource Groups"
+  echo ""
+  echo "  rg-shopeasy-dns    → ${LOCATION_US}  (DNS zones + Traffic Manager)"
+  echo "  rg-shopeasy-us     → ${LOCATION_US}  (East US primary endpoint)"
+  echo "  rg-shopeasy-eastus2 → ${LOCATION_DR} (East US 2 DR endpoint)"
+  echo ""
 
-  for rg_info in "${RG_DNS}:${LOCATION_US}" "${RG_US}:${LOCATION_US}" "${RG_EU}:${LOCATION_EU}" "${RG_AP}:${LOCATION_AP}"; do
+  for rg_info in "${RG_DNS}:${LOCATION_US}" "${RG_US}:${LOCATION_US}" "${RG_DR}:${LOCATION_DR}"; do
     RG="${rg_info%%:*}"
     LOC="${rg_info##*:}"
     print_step "Creating ${RG} in ${LOC}..."
@@ -60,11 +63,11 @@ create_resource_groups() {
   done
 }
 
-# ── Step 2: Create VNet (needed for private DNS) ──────────────
-create_vnet() {
-  print_header "Step 2: Create VNet for Private DNS Zone Linking"
-  print_step "Creating VNet in ${RG_US}..."
+# ── Step 2: Create VNets (needed for private DNS) ─────────────
+create_vnets() {
+  print_header "Step 2: Create VNets for Private DNS Zone Linking"
 
+  print_step "Creating VNet in East US (${RG_US})..."
   az network vnet create \
     --resource-group "${RG_US}" \
     --name "vnet-${COMPANY}-prod" \
@@ -78,9 +81,25 @@ create_vnet() {
     --resource-group "${RG_US}" \
     --name "vnet-${COMPANY}-prod" \
     --query id -o tsv)
+  print_ok "East US VNet: ${VNET_ID}"
 
-  print_ok "VNet created: ${VNET_ID}"
-  export VNET_ID
+  print_step "Creating VNet in East US 2 (${RG_DR})..."
+  az network vnet create \
+    --resource-group "${RG_DR}" \
+    --name "vnet-${COMPANY}-dr" \
+    --address-prefix "10.0.0.0/16" \
+    --subnet-name "subnet-app" \
+    --subnet-prefix "10.0.1.0/24" \
+    --location "${LOCATION_DR}" \
+    --output table
+
+  VNET_DR_ID=$(az network vnet show \
+    --resource-group "${RG_DR}" \
+    --name "vnet-${COMPANY}-dr" \
+    --query id -o tsv)
+  print_ok "East US 2 VNet: ${VNET_DR_ID}"
+
+  export VNET_ID VNET_DR_ID
 }
 
 # ── Step 3: Deploy DNS Zones ──────────────────────────────────
@@ -88,17 +107,16 @@ deploy_dns_zones() {
   print_header "Step 3: Deploy Public & Private DNS Zones"
   echo ""
   echo "  Public Zone: ${DOMAIN_NAME}"
-  echo "  ├── @ A   → ${EAST_US_LB_IP}"
-  echo "  ├── www A → ${EAST_US_LB_IP}"
-  echo "  ├── us A  → ${EAST_US_LB_IP}"
-  echo "  ├── eu A  → ${WEST_EUROPE_LB_IP}"
-  echo "  └── ap A  → ${SE_ASIA_LB_IP}"
+  echo "  ├── @ A   → ${EAST_US_LB_IP}   (apex → East US)"
+  echo "  ├── www A → ${EAST_US_LB_IP}   (East US)"
+  echo "  ├── us  A → ${EAST_US_LB_IP}   (East US primary)"
+  echo "  └── dr  A → ${EAST_US2_LB_IP}  (East US 2 DR)"
   echo ""
   echo "  Private Zone: corp.shopeasy.internal"
-  echo "  ├── order-service  → 10.0.2.10"
+  echo "  ├── order-service   → 10.0.2.10"
   echo "  ├── product-service → 10.0.2.11"
-  echo "  ├── db-master      → 10.0.3.4"
-  echo "  └── redis          → 10.0.2.20"
+  echo "  ├── db-master       → 10.0.3.4"
+  echo "  └── redis           → 10.0.2.20"
   echo ""
 
   VNET_ID=$(az network vnet show \
@@ -106,15 +124,20 @@ deploy_dns_zones() {
     --name "vnet-${COMPANY}-prod" \
     --query id -o tsv)
 
+  VNET_DR_ID=$(az network vnet show \
+    --resource-group "${RG_DR}" \
+    --name "vnet-${COMPANY}-dr" \
+    --query id -o tsv 2>/dev/null || echo "")
+
   az deployment group create \
     --resource-group "${RG_DNS}" \
     --template-file "${LAB_DIR}/01-dns-zones/main.bicep" \
     --parameters "${LAB_DIR}/01-dns-zones/parameters.json" \
     --parameters "vnetId=${VNET_ID}" \
+                 "eastUs2VnetId=${VNET_DR_ID}" \
                  "lbPublicIp=${EAST_US_LB_IP}" \
                  "eastUsLbIp=${EAST_US_LB_IP}" \
-                 "westEuropeLbIp=${WEST_EUROPE_LB_IP}" \
-                 "seAsiaLbIp=${SE_ASIA_LB_IP}" \
+                 "eastUs2LbIp=${EAST_US2_LB_IP}" \
     --name "deploy-dns-$(date +%Y%m%d%H%M%S)" \
     --output table
 
@@ -132,7 +155,7 @@ deploy_dns_zones() {
 # ── Step 4: Create Regional Public IPs ───────────────────────
 create_regional_ips() {
   print_header "Step 4: Create Regional Public IP Addresses"
-  print_step "Creating public IPs in each region (simulating load balancers)..."
+  print_step "Creating public IPs in East US and East US 2..."
 
   az network public-ip create \
     --resource-group "${RG_US}" \
@@ -143,27 +166,22 @@ create_regional_ips() {
     --output table
 
   az network public-ip create \
-    --resource-group "${RG_EU}" \
-    --name "pip-lb-eu-prod" \
+    --resource-group "${RG_DR}" \
+    --name "pip-lb-eastus2-prod" \
     --sku Standard \
     --allocation-method Static \
-    --location "${LOCATION_EU}" \
-    --output table
-
-  az network public-ip create \
-    --resource-group "${RG_AP}" \
-    --name "pip-lb-ap-prod" \
-    --sku Standard \
-    --allocation-method Static \
-    --location "${LOCATION_AP}" \
+    --location "${LOCATION_DR}" \
     --output table
 
   US_PIP_ID=$(az network public-ip show --resource-group "${RG_US}" --name "pip-lb-us-prod" --query id -o tsv)
-  EU_PIP_ID=$(az network public-ip show --resource-group "${RG_EU}" --name "pip-lb-eu-prod" --query id -o tsv)
-  AP_PIP_ID=$(az network public-ip show --resource-group "${RG_AP}" --name "pip-lb-ap-prod" --query id -o tsv)
+  DR_PIP_ID=$(az network public-ip show --resource-group "${RG_DR}" --name "pip-lb-eastus2-prod" --query id -o tsv)
 
-  print_ok "Regional IPs created"
-  export US_PIP_ID EU_PIP_ID AP_PIP_ID
+  US_PIP_ADDR=$(az network public-ip show --resource-group "${RG_US}" --name "pip-lb-us-prod" --query ipAddress -o tsv)
+  DR_PIP_ADDR=$(az network public-ip show --resource-group "${RG_DR}" --name "pip-lb-eastus2-prod" --query ipAddress -o tsv)
+
+  print_ok "East US IP:  ${US_PIP_ADDR} (${US_PIP_ID})"
+  print_ok "East US 2 IP: ${DR_PIP_ADDR} (${DR_PIP_ID})"
+  export US_PIP_ID DR_PIP_ID
 }
 
 # ── Step 5: Deploy Traffic Manager (Geo + Performance) ───────
@@ -171,22 +189,20 @@ deploy_traffic_manager() {
   print_header "Step 5: Deploy Traffic Manager Profiles"
   echo ""
   echo "  Three profiles:"
-  echo "  1. Geographic routing (by user's region)"
-  echo "  2. Performance routing (by latency)"
-  echo "  3. Priority failover (East US → Europe → Asia)"
+  echo "  1. Geographic routing   (NA/SA → East US | WORLD → East US 2)"
+  echo "  2. Performance routing  (lowest latency between East US and East US 2)"
+  echo "  3. Priority failover    (East US P1 → East US 2 P2)"
   echo ""
 
   US_PIP_ID=$(az network public-ip show --resource-group "${RG_US}" --name "pip-lb-us-prod" --query id -o tsv)
-  EU_PIP_ID=$(az network public-ip show --resource-group "${RG_EU}" --name "pip-lb-eu-prod" --query id -o tsv)
-  AP_PIP_ID=$(az network public-ip show --resource-group "${RG_AP}" --name "pip-lb-ap-prod" --query id -o tsv)
+  DR_PIP_ID=$(az network public-ip show --resource-group "${RG_DR}" --name "pip-lb-eastus2-prod" --query id -o tsv)
 
   az deployment group create \
     --resource-group "${RG_DNS}" \
     --template-file "${LAB_DIR}/02-traffic-manager/main.bicep" \
     --parameters "${LAB_DIR}/02-traffic-manager/parameters.json" \
     --parameters "eastUsPublicIpId=${US_PIP_ID}" \
-                 "westEuropePublicIpId=${EU_PIP_ID}" \
-                 "seAsiaPublicIpId=${AP_PIP_ID}" \
+                 "eastUs2PublicIpId=${DR_PIP_ID}" \
     --name "deploy-tm-$(date +%Y%m%d%H%M%S)" \
     --output table
 
@@ -237,9 +253,9 @@ enable_dnssec() {
 simulate_dns_failure() {
   print_header "Step 7: DNS Failure Simulation & Recovery"
   echo ""
-  echo "  Simulating regional DNS failure:"
+  echo "  Simulating East US regional failure:"
   echo "  → Disabling East US endpoint in failover Traffic Manager profile"
-  echo "  → Traffic should route to West Europe automatically"
+  echo "  → Traffic should route to East US 2 automatically"
   echo ""
   pause
 
@@ -267,7 +283,7 @@ simulate_dns_failure() {
     done
     echo ""
 
-    print_step "DNS resolution after failure (should be West Europe IP):"
+    print_step "DNS resolution after failure (should be East US 2 IP):"
     nslookup "${TM_FAILOVER}" 2>/dev/null || dig "${TM_FAILOVER}" A 2>/dev/null || true
 
     print_step "Re-enabling East US endpoint (recovery)..."
@@ -292,17 +308,20 @@ dns_query_demos() {
   echo "  Run these during the live session to show concepts."
   echo ""
 
-  # Azure name servers
   print_step "Get Azure DNS name servers for ${DOMAIN_NAME}:"
   az network dns zone show \
     --resource-group "${RG_DNS}" \
     --name "${DOMAIN_NAME}" \
     --query nameServers -o table 2>/dev/null || echo "  Zone not deployed yet"
 
-  # Query DNS records
   print_step "Query A records:"
   echo "  nslookup www.${DOMAIN_NAME}"
   nslookup "www.${DOMAIN_NAME}" 2>/dev/null || true
+
+  print_step "Query regional subdomains:"
+  echo "  us.${DOMAIN_NAME}  → East US primary"
+  echo "  dr.${DOMAIN_NAME}  → East US 2 DR"
+  nslookup "us.${DOMAIN_NAME}" 2>/dev/null || true
 
   print_step "Query MX records:"
   dig MX "${DOMAIN_NAME}" +short 2>/dev/null || nslookup -type=MX "${DOMAIN_NAME}" 2>/dev/null || true
@@ -328,8 +347,12 @@ cleanup() {
   echo -e "Type 'yes' to confirm: "
   read -r confirm
   if [[ "${confirm}" == "yes" ]]; then
-    for rg in "${RG_DNS}" "${RG_US}" "${RG_EU}" "${RG_AP}"; do
-      az group delete --name "${rg}" --yes --no-wait 2>/dev/null && print_ok "Deleting ${rg}..." || true
+    for rg in "${RG_DNS}" "${RG_US}" "${RG_DR}"; do
+      if az group exists --name "${rg}" | grep -q "true"; then
+        az group delete --name "${rg}" --yes --no-wait && print_ok "Deleting ${rg}..."
+      else
+        print_warn "${rg} does not exist, skipping."
+      fi
     done
     print_ok "Deletion initiated for all resource groups"
   else
@@ -342,10 +365,11 @@ show_menu() {
   echo ""
   echo -e "${BLUE}╔══════════════════════════════════════════════════╗${NC}"
   echo -e "${BLUE}║  Case Study 4: Global DNS Management Lab        ║${NC}"
+  echo -e "${BLUE}║  Regions: East US (primary) | East US 2 (DR)   ║${NC}"
   echo -e "${BLUE}╠══════════════════════════════════════════════════╣${NC}"
   echo -e "${BLUE}║  1) Run full deployment (all steps)             ║${NC}"
   echo -e "${BLUE}║  2) Step 1: Create Resource Groups              ║${NC}"
-  echo -e "${BLUE}║  3) Step 2: Create VNet                         ║${NC}"
+  echo -e "${BLUE}║  3) Step 2: Create VNets                        ║${NC}"
   echo -e "${BLUE}║  4) Step 3: Deploy DNS Zones                    ║${NC}"
   echo -e "${BLUE}║  5) Step 4: Create Regional IPs                 ║${NC}"
   echo -e "${BLUE}║  6) Step 5: Deploy Traffic Manager              ║${NC}"
@@ -366,7 +390,7 @@ main() {
     case "${choice}" in
       1)
         create_resource_groups
-        create_vnet
+        create_vnets
         deploy_dns_zones
         create_regional_ips
         deploy_traffic_manager
@@ -375,7 +399,7 @@ main() {
         simulate_dns_failure
         ;;
       2) create_resource_groups ;;
-      3) create_vnet ;;
+      3) create_vnets ;;
       4) deploy_dns_zones ;;
       5) create_regional_ips ;;
       6) deploy_traffic_manager ;;
