@@ -115,36 +115,37 @@ preflight() {
   print_ok "Pre-flight passed. Subscription: ${SUBSCRIPTION_ID}"
 }
 
+# ── Internal helper: create a single resource group idempotently ─
+_create_rg() {
+  local rg="$1"
+  local loc="$2"
+  local tags="${3:-}"
+  if rg_exists "${rg}"; then
+    local existing_loc
+    existing_loc=$(az group show --name "${rg}" --query location -o tsv)
+    if [[ "${existing_loc}" != "${loc}" ]]; then
+      print_error "Resource group '${rg}' already exists in '${existing_loc}' but expected '${loc}'."
+      print_warn "Delete it first:  az group delete --name ${rg} --yes"
+      return 1
+    fi
+    print_ok "${rg} already exists in ${loc} — skipping creation"
+  else
+    print_step "Creating ${rg} in ${loc}..."
+    az_retry group create \
+      --name "${rg}" \
+      --location "${loc}" \
+      --tags ${tags} \
+      --output table || return 1
+    print_ok "${rg} created"
+  fi
+}
+
 # ── Step 1: Create Resource Groups ───────────────────────────
 create_resource_groups() {
   print_header "Step 1: Create Resource Groups"
-
-  local -A rg_map=(
-    ["${RESOURCE_GROUP_PRIMARY}"]="${LOCATION_PRIMARY}"
-    ["${RESOURCE_GROUP_DR}"]="${LOCATION_DR}"
-  )
-
-  for rg in "${!rg_map[@]}"; do
-    local loc="${rg_map[${rg}]}"
-    if rg_exists "${rg}"; then
-      local existing_loc
-      existing_loc=$(az group show --name "${rg}" --query location -o tsv)
-      if [[ "${existing_loc}" != "${loc}" ]]; then
-        print_error "Resource group '${rg}' already exists in '${existing_loc}' but expected '${loc}'."
-        print_warn "Delete it first:  az group delete --name ${rg} --yes"
-        return 1
-      fi
-      print_ok "${rg} already exists in ${loc} — skipping creation"
-    else
-      print_step "Creating ${rg} in ${loc}..."
-      az_retry group create \
-        --name "${rg}" \
-        --location "${loc}" \
-        --tags "environment=${ENVIRONMENT}" "role=${rg##*-}" "purpose=disaster-recovery" \
-        --output table || return 1
-      print_ok "${rg} created"
-    fi
-  done
+  local tags="environment=${ENVIRONMENT} role=primary purpose=disaster-recovery"
+  _create_rg "${RESOURCE_GROUP_PRIMARY}" "${LOCATION_PRIMARY}" "${tags}" || return 1
+  _create_rg "${RESOURCE_GROUP_DR}"      "${LOCATION_DR}"      "${tags}" || return 1
 }
 
 # ── Step 2a: Deploy PRIMARY VNet (East US) ────────────────────

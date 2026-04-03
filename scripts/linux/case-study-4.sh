@@ -116,40 +116,41 @@ preflight() {
   print_ok "Pre-flight passed. Subscription: ${SUBSCRIPTION_ID}"
 }
 
+# ── Internal helper: create a single resource group idempotently ─
+_create_rg() {
+  local rg="$1"
+  local loc="$2"
+  local tags="${3:-}"
+  if rg_exists "${rg}"; then
+    local existing_loc
+    existing_loc=$(az group show --name "${rg}" --query location -o tsv)
+    if [[ "${existing_loc}" != "${loc}" ]]; then
+      print_error "Resource group '${rg}' already exists in '${existing_loc}' but expected '${loc}'."
+      print_warn "Delete it first:  az group delete --name ${rg} --yes"
+      return 1
+    fi
+    print_ok "${rg} already exists in ${loc} — skipping creation"
+  else
+    print_step "Creating ${rg} in ${loc}..."
+    az_retry group create --name "${rg}" --location "${loc}" \
+      --tags ${tags} \
+      --output table || return 1
+    print_ok "${rg} created"
+  fi
+}
+
 # ── Step 1: Create Resource Groups ───────────────────────────
 create_resource_groups() {
   print_header "Step 1: Create Resource Groups"
   echo ""
-  echo "  ${RG_DNS}     → ${LOCATION_US}  (DNS zones + Traffic Manager)"
-  echo "  ${RG_US}      → ${LOCATION_US}  (East US primary endpoint)"
-  echo "  ${RG_DR}  → ${LOCATION_DR} (East US 2 DR endpoint)"
+  echo "  ${RG_DNS}      → ${LOCATION_US}  (DNS zones + Traffic Manager)"
+  echo "  ${RG_US}       → ${LOCATION_US}  (East US primary endpoint)"
+  echo "  ${RG_DR}       → ${LOCATION_DR}  (East US 2 DR endpoint)"
   echo ""
-
-  local -A rg_map=(
-    ["${RG_DNS}"]="${LOCATION_US}"
-    ["${RG_US}"]="${LOCATION_US}"
-    ["${RG_DR}"]="${LOCATION_DR}"
-  )
-
-  for rg in "${!rg_map[@]}"; do
-    local loc="${rg_map[${rg}]}"
-    if rg_exists "${rg}"; then
-      local existing_loc
-      existing_loc=$(az group show --name "${rg}" --query location -o tsv)
-      if [[ "${existing_loc}" != "${loc}" ]]; then
-        print_error "Resource group '${rg}' already exists in '${existing_loc}' but expected '${loc}'."
-        print_warn "Delete it first:  az group delete --name ${rg} --yes"
-        return 1
-      fi
-      print_ok "${rg} already exists in ${loc} — skipping creation"
-    else
-      print_step "Creating ${rg} in ${loc}..."
-      az_retry group create --name "${rg}" --location "${loc}" \
-        --tags "company=${COMPANY}" "purpose=dns-management" \
-        --output table || return 1
-      print_ok "${rg} created"
-    fi
-  done
+  local tags="company=${COMPANY} purpose=dns-management"
+  _create_rg "${RG_DNS}" "${LOCATION_US}" "${tags}" || return 1
+  _create_rg "${RG_US}"  "${LOCATION_US}" "${tags}" || return 1
+  _create_rg "${RG_DR}"  "${LOCATION_DR}" "${tags}" || return 1
 }
 
 # ── Step 2: Create VNets (needed for private DNS) ─────────────
