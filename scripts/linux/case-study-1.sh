@@ -9,7 +9,7 @@
 #   • Idempotent ops    → safe to re-run any step at any time
 #   • Retry wrapper     → 3 attempts with exp. backoff for az calls
 #   • Prereq guards     → each step validates its dependencies first
-#   • --output none     → avoids "content already consumed" ARM bug
+#   • --no-wait+polling → avoids "content already consumed" ARM LRO bug
 #   • SIGINT trap       → leaves the terminal in a clean state
 # ============================================================
 
