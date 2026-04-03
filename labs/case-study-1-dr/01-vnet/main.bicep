@@ -1,5 +1,5 @@
 // Case Study 1 - Step 1: Virtual Network deployment
-// Deploys a VNet with subnets that mirror the AWS architecture for DR failover
+// Deploys a VNet with 3-tier subnet layout for DR failover
 
 @description('Azure region for deployment')
 param location string = resourceGroup().location
@@ -17,17 +17,13 @@ var vnetName = '${companyPrefix}-vnet-${environment}'
 var nsgWebName = 'nsg-web-${environment}'
 var nsgAppName = 'nsg-app-${environment}'
 var nsgDbName = 'nsg-db-${environment}'
-var bastionName = 'bastion-${companyPrefix}-${environment}'
-var bastionPipName = 'pip-bastion-${environment}'
 
-// Mirrors AWS VPC CIDR layout
 var addressSpace = '10.0.0.0/16'
 var subnets = {
   web: '10.0.1.0/24'
   app: '10.0.2.0/24'
   db: '10.0.3.0/24'
   gateway: '10.0.4.0/27'
-  bastion: '10.0.5.0/27'
 }
 
 // ─── NSGs ─────────────────────────────────────────────────────────────────────
@@ -203,49 +199,6 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-04-01' = {
         name: 'subnet-gateway'
         properties: {
           addressPrefix: subnets.gateway
-        }
-      }
-      {
-        // Bastion requires exactly this name
-        name: 'AzureBastionSubnet'
-        properties: {
-          addressPrefix: subnets.bastion
-        }
-      }
-    ]
-  }
-}
-
-// ─── Azure Bastion ────────────────────────────────────────────────────────────
-
-resource bastionPip 'Microsoft.Network/publicIPAddresses@2023-04-01' = {
-  name: bastionPipName
-  location: location
-  sku: {
-    name: 'Standard'
-  }
-  properties: {
-    publicIPAllocationMethod: 'Static'
-  }
-}
-
-resource bastion 'Microsoft.Network/bastionHosts@2023-04-01' = {
-  name: bastionName
-  location: location
-  sku: {
-    name: 'Basic'
-  }
-  properties: {
-    ipConfigurations: [
-      {
-        name: 'ipconfig-bastion'
-        properties: {
-          subnet: {
-            id: '${vnet.id}/subnets/AzureBastionSubnet'
-          }
-          publicIPAddress: {
-            id: bastionPip.id
-          }
         }
       }
     ]

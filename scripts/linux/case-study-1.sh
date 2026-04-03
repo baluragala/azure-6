@@ -72,10 +72,10 @@ deploy_primary_vnet() {
   echo ""
   echo "  Region: ${LOCATION_PRIMARY} (East US)"
   echo "  Address Space: 10.0.0.0/16"
-  echo "  ├── subnet-web   10.0.1.0/24  (NSG: 443/80 from Internet)"
-  echo "  ├── subnet-app   10.0.2.0/24  (NSG: 8080 from web tier)"
-  echo "  ├── subnet-db    10.0.3.0/24  (NSG: 5432 from app tier)"
-  echo "  └── AzureBastionSubnet 10.0.5.0/27"
+  echo "  ├── subnet-web     10.0.1.0/24  (NSG: 443/80 from Internet)"
+  echo "  ├── subnet-app     10.0.2.0/24  (NSG: 8080 from web tier)"
+  echo "  ├── subnet-db      10.0.3.0/24  (NSG: 5432 from app tier)"
+  echo "  └── subnet-gateway 10.0.4.0/27"
   echo ""
 
   az deployment group create \
