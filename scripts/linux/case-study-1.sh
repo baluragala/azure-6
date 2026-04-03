@@ -9,7 +9,8 @@
 #   • Idempotent ops    → safe to re-run any step at any time
 #   • Retry wrapper     → 3 attempts with exp. backoff for az calls
 #   • Prereq guards     → each step validates its dependencies first
-#   • SIGINT/ERR trap   → leaves the terminal in a clean state
+#   • --output none     → avoids "content already consumed" ARM bug
+#   • SIGINT trap       → leaves the terminal in a clean state
 # ============================================================
 
 set -uo pipefail   # -u: unbound vars are errors  -o pipefail: pipe errors propagate
@@ -46,14 +47,26 @@ LB_PIP_NAME="pip-lb-${ENVIRONMENT}"
 TM_PROFILE_NAME="tm-${COMPANY_PREFIX}-dr"
 
 # ── Idempotency helpers ───────────────────────────────────────
-rg_exists()        { az group show          --name "$1"                                  &>/dev/null; }
-vnet_exists()      { az network vnet show   --resource-group "$1" --name "$2"           &>/dev/null; }
-pip_exists()       { az network public-ip show --resource-group "$1" --name "$2"        &>/dev/null; }
+rg_exists()        { az group show                   --name "$1"                          &>/dev/null; }
+vnet_exists()      { az network vnet show            --resource-group "$1" --name "$2"   &>/dev/null; }
+pip_exists()       { az network public-ip show       --resource-group "$1" --name "$2"   &>/dev/null; }
 tm_profile_exists(){ az network traffic-manager profile show --resource-group "$1" --name "$2" &>/dev/null; }
-dns_zone_exists()  { az network dns zone show --resource-group "$1" --name "$2"         &>/dev/null; }
+dns_zone_exists()  { az network dns zone show        --resource-group "$1" --name "$2"   &>/dev/null; }
+vm_exists()        { az vm show                      --resource-group "$1" --name "$2"   &>/dev/null; }
+
+# ── Deploy wrapper: runs az deployment group create without --output table
+#    "--output table" causes "content already consumed" in Azure CLI when
+#    ARM returns an async polling response. Use --output none + post-query.
+az_deploy() {
+  local deploy_name="${1}"; shift    # first arg is the deployment name label for logging
+  print_step "Deploying: ${deploy_name} (this may take several minutes)..."
+  az deployment group create \
+    --output none \
+    "$@" || return 1
+  print_ok "Deployment complete: ${deploy_name}"
+}
 
 # ── Retry wrapper (3 attempts, exponential backoff) ──────────
-# Usage: az_retry <az subcommand and args…>
 az_retry() {
   local max_attempts=3
   local delay=10
@@ -69,12 +82,11 @@ az_retry() {
     fi
     (( attempt++ ))
   done
-  print_error "Azure CLI command failed after ${max_attempts} attempts: az $*"
+  print_error "Azure CLI command failed after ${max_attempts} attempts."
   return 1
 }
 
 # ── Step runner: isolates failures so menu stays alive ───────
-# Usage: run_step "Step name" function_name [args…]
 run_step() {
   local name="$1"; shift
   if "$@"; then
@@ -168,12 +180,11 @@ deploy_primary_vnet() {
   if vnet_exists "${RESOURCE_GROUP_PRIMARY}" "${VNET_NAME}"; then
     print_ok "Primary VNet '${VNET_NAME}' already exists — skipping deployment"
   else
-    az_retry deployment group create \
+    az_deploy "Primary VNet" \
       --resource-group "${RESOURCE_GROUP_PRIMARY}" \
       --template-file "${LAB_DIR}/01-vnet/main.bicep" \
       --parameters location="${LOCATION_PRIMARY}" environment="${ENVIRONMENT}" companyPrefix="${COMPANY_PREFIX}" \
-      --name "deploy-vnet-primary-$(date +%Y%m%d%H%M%S)" \
-      --output table || return 1
+      --name "deploy-vnet-primary-$(date +%Y%m%d%H%M%S)" || return 1
   fi
 
   PRIMARY_VNET_ID=$(az network vnet show \
@@ -199,12 +210,11 @@ deploy_dr_vnet() {
   if vnet_exists "${RESOURCE_GROUP_DR}" "${VNET_NAME}"; then
     print_ok "DR VNet '${VNET_NAME}' already exists — skipping deployment"
   else
-    az_retry deployment group create \
+    az_deploy "DR VNet" \
       --resource-group "${RESOURCE_GROUP_DR}" \
       --template-file "${LAB_DIR}/01-vnet/main.bicep" \
       --parameters location="${LOCATION_DR}" environment="${ENVIRONMENT}" companyPrefix="${COMPANY_PREFIX}" \
-      --name "deploy-vnet-dr-$(date +%Y%m%d%H%M%S)" \
-      --output table || return 1
+      --name "deploy-vnet-dr-$(date +%Y%m%d%H%M%S)" || return 1
   fi
 
   DR_VNET_ID=$(az network vnet show \
@@ -226,7 +236,6 @@ deploy_dns() {
     print_error "Primary resource group not found. Run Step 1 first."
     return 1
   }
-
   vnet_exists "${RESOURCE_GROUP_PRIMARY}" "${VNET_NAME}" || {
     print_error "Primary VNet not found. Run Step 2a first."
     return 1
@@ -240,15 +249,14 @@ deploy_dns() {
     print_ok "DNS zones already exist — re-deploying to reconcile records"
   fi
 
-  az_retry deployment group create \
+  az_deploy "DNS Zones" \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --template-file "${LAB_DIR}/02-dns/main.bicep" \
     --parameters "${LAB_DIR}/02-dns/parameters.json" \
     --parameters "vnetId=${PRIMARY_VNET_ID}" \
                  "publicDnsZoneName=${COMPANY_PREFIX}-app.example.com" \
                  "privateDnsZoneName=internal.${COMPANY_PREFIX}.azure" \
-    --name "deploy-dns-$(date +%Y%m%d%H%M%S)" \
-    --output table || return 1
+    --name "deploy-dns-$(date +%Y%m%d%H%M%S)" || return 1
 
   print_step "Azure DNS Name Servers (add to your domain registrar):"
   az network dns zone show \
@@ -264,7 +272,7 @@ deploy_dns() {
 deploy_primary_infra() {
   print_header "Step 4a: Deploy PRIMARY App Infrastructure (East US)"
   echo ""
-  echo "  ├── Load Balancer + Public IP"
+  echo "  ├── Load Balancer + Public IP (${LB_PIP_NAME})"
   echo "  ├── Web VM (Ubuntu 22.04 + Nginx) — subnet-web"
   echo "  ├── App VM (Ubuntu 22.04)          — subnet-app"
   echo "  ├── Storage Account (Standard_LRS)"
@@ -280,8 +288,15 @@ deploy_primary_infra() {
     return 1
   }
 
-  _get_subnet_ids "${RESOURCE_GROUP_PRIMARY}" || return 1
-  _deploy_infra   "${RESOURCE_GROUP_PRIMARY}" "${LOCATION_PRIMARY}" "primary" || return 1
+  # Check if the full infra stack is already deployed (LB PIP + both VMs)
+  if pip_exists "${RESOURCE_GROUP_PRIMARY}" "${LB_PIP_NAME}" && \
+     vm_exists  "${RESOURCE_GROUP_PRIMARY}" "vm-web-${ENVIRONMENT}" && \
+     vm_exists  "${RESOURCE_GROUP_PRIMARY}" "vm-app-${ENVIRONMENT}"; then
+    print_ok "Primary infrastructure already deployed (LB PIP + VMs found) — skipping"
+  else
+    _get_subnet_ids "${RESOURCE_GROUP_PRIMARY}" || return 1
+    _deploy_infra   "${RESOURCE_GROUP_PRIMARY}" "${LOCATION_PRIMARY}" "primary" || return 1
+  fi
 
   PRIMARY_LB_PIP_ID=$(az network public-ip show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
@@ -294,7 +309,7 @@ deploy_primary_infra() {
     print_warn "LB Public IP not found yet — it may still be provisioning."
   }
 
-  print_ok "Primary infrastructure deployed. LB IP: ${PRIMARY_LB_PIP}"
+  print_ok "Primary infrastructure ready. LB IP: ${PRIMARY_LB_PIP}"
   export PRIMARY_LB_PIP_ID PRIMARY_LB_PIP
 }
 
@@ -314,8 +329,15 @@ deploy_dr_infra() {
     return 1
   }
 
-  _get_subnet_ids "${RESOURCE_GROUP_DR}" || return 1
-  _deploy_infra   "${RESOURCE_GROUP_DR}" "${LOCATION_DR}" "dr" || return 1
+  # Check if the full infra stack is already deployed (LB PIP + both VMs)
+  if pip_exists "${RESOURCE_GROUP_DR}" "${LB_PIP_NAME}" && \
+     vm_exists  "${RESOURCE_GROUP_DR}" "vm-web-${ENVIRONMENT}" && \
+     vm_exists  "${RESOURCE_GROUP_DR}" "vm-app-${ENVIRONMENT}"; then
+    print_ok "DR infrastructure already deployed (LB PIP + VMs found) — skipping"
+  else
+    _get_subnet_ids "${RESOURCE_GROUP_DR}" || return 1
+    _deploy_infra   "${RESOURCE_GROUP_DR}" "${LOCATION_DR}" "dr" || return 1
+  fi
 
   DR_LB_PIP_ID=$(az network public-ip show \
     --resource-group "${RESOURCE_GROUP_DR}" \
@@ -328,7 +350,7 @@ deploy_dr_infra() {
     print_warn "DR LB Public IP not found yet — it may still be provisioning."
   }
 
-  print_ok "DR infrastructure deployed. LB IP: ${DR_LB_PIP}"
+  print_ok "DR infrastructure ready. LB IP: ${DR_LB_PIP}"
   export DR_LB_PIP_ID DR_LB_PIP
 }
 
@@ -353,22 +375,21 @@ _deploy_infra() {
   local location="$2"
   local role="$3"
 
-  # Training default password — override with CS1_VM_PASSWORD env var for real deployments.
-  # Azure password requirements: 12+ chars, upper + lower + digit + symbol.
+  # Training default password — override with CS1_VM_PASSWORD env var.
+  # Azure requirements: 12+ chars, upper + lower + digit + symbol.
   local DEFAULT_PASSWORD="AzureLab@Train24!"
   local VM_PASSWORD="${CS1_VM_PASSWORD:-${DEFAULT_PASSWORD}}"
-  print_warn "VM password: using ${VM_PASSWORD:0:4}***  (set CS1_VM_PASSWORD env var to override)"
+  print_warn "VM password: ${VM_PASSWORD:0:4}***  (export CS1_VM_PASSWORD=<pass> to override)"
   print_warn "IMPORTANT: Change this password before any non-lab use."
 
-  az_retry deployment group create \
+  az_deploy "Infra stack (${role})" \
     --resource-group "${rg}" \
     --template-file "${LAB_DIR}/03-arm-templates/main.bicep" \
     --parameters "location=${location}" \
                  "subnetWebId=${SUBNET_WEB_ID}" \
                  "subnetAppId=${SUBNET_APP_ID}" \
                  "adminPassword=${VM_PASSWORD}" \
-    --name "deploy-infra-${role}-$(date +%Y%m%d%H%M%S)" \
-    --output table
+    --name "deploy-infra-${role}-$(date +%Y%m%d%H%M%S)"
 }
 
 # ── Step 5: Deploy Traffic Manager ───────────────────────────
@@ -383,13 +404,12 @@ deploy_traffic_manager() {
   echo "  Failover time  : ~30-60 seconds"
   echo ""
 
-  # Require both LB PIPs to exist before deploying TM
   pip_exists "${RESOURCE_GROUP_PRIMARY}" "${LB_PIP_NAME}" || {
-    print_error "Primary LB Public IP not found. Run Step 4a first."
+    print_error "Primary LB Public IP '${LB_PIP_NAME}' not found. Run Step 4a first."
     return 1
   }
   pip_exists "${RESOURCE_GROUP_DR}" "${LB_PIP_NAME}" || {
-    print_error "DR LB Public IP not found. Run Step 4b first."
+    print_error "DR LB Public IP '${LB_PIP_NAME}' not found. Run Step 4b first."
     return 1
   }
 
@@ -404,15 +424,14 @@ deploy_traffic_manager() {
     print_ok "Traffic Manager profile already exists — re-deploying to reconcile"
   fi
 
-  az_retry deployment group create \
+  az_deploy "Traffic Manager" \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
     --template-file "${LAB_DIR}/04-traffic-manager/main.bicep" \
     --parameters "companyPrefix=${COMPANY_PREFIX}" \
                  "primaryPublicIpId=${PRIMARY_LB_PIP_ID}" \
                  "drPublicIpId=${DR_LB_PIP_ID}" \
                  "dnsTtl=30" \
-    --name "deploy-tm-$(date +%Y%m%d%H%M%S)" \
-    --output table || return 1
+    --name "deploy-tm-$(date +%Y%m%d%H%M%S)" || return 1
 
   TM_FQDN=$(az network traffic-manager profile show \
     --resource-group "${RESOURCE_GROUP_PRIMARY}" \
@@ -458,7 +477,8 @@ run_failover_test() {
     --profile-name "${TM_PROFILE_NAME}" \
     --name "endpoint-eastus-primary" \
     --type azureEndpoints \
-    --endpoint-status Disabled || return 1
+    --endpoint-status Disabled \
+    --output none || return 1
   print_ok "East US endpoint disabled"
 
   print_step "Waiting 60 seconds (probe × failure threshold + TTL propagation)..."
@@ -489,7 +509,8 @@ run_failover_test() {
     --profile-name "${TM_PROFILE_NAME}" \
     --name "endpoint-eastus-primary" \
     --type azureEndpoints \
-    --endpoint-status Enabled || {
+    --endpoint-status Enabled \
+    --output none || {
     print_warn "Re-enable command failed — endpoint may already be enabled."
   }
   print_ok "East US endpoint re-enabled. Traffic will fail back within ~60 seconds."
@@ -505,6 +526,7 @@ run_failover_test() {
 verify_deployment() {
   print_header "Deployment Verification"
 
+  local rg
   for rg in "${RESOURCE_GROUP_PRIMARY}" "${RESOURCE_GROUP_DR}"; do
     if rg_exists "${rg}"; then
       print_step "Resources in ${rg}:"
@@ -545,6 +567,7 @@ cleanup() {
   echo -e "${YELLOW}Type 'yes' to confirm: ${NC}"
   read -r confirm
   if [[ "${confirm}" == "yes" ]]; then
+    local rg
     for rg in "${RESOURCE_GROUP_PRIMARY}" "${RESOURCE_GROUP_DR}"; do
       if rg_exists "${rg}"; then
         az group delete --name "${rg}" --yes --no-wait
