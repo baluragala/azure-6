@@ -54,17 +54,21 @@ tm_profile_exists(){ az network traffic-manager profile show --resource-group "$
 dns_zone_exists()  { az network dns zone show        --resource-group "$1" --name "$2"   &>/dev/null; }
 vm_exists()        { az vm show                      --resource-group "$1" --name "$2"   &>/dev/null; }
 
-# ── Deploy wrapper: --no-wait + manual polling
+# ── Deploy wrapper: background CLI + independent polling
 #
 #    "The content for this response was already consumed" is an Azure CLI
-#    SDK bug triggered when ARM's async streaming response body is read
-#    twice during long-running deployments. --output none does NOT help
-#    because the read happens inside the ARM polling layer, not the
-#    output renderer.
+#    SDK bug. It crashes during the LRO polling loop when ARM's streaming
+#    response body is read a second time. The crash happens AFTER the
+#    initial PUT is accepted by ARM — the deployment IS running.
 #
-#    Fix: --no-wait exits immediately after ARM accepts the request (no
-#    streaming body). We then poll az deployment group show until the
-#    deployment reaches a terminal state (Succeeded / Failed / Canceled).
+#    --no-wait does NOT help: the bug fires on the initial PUT response
+#    before --no-wait logic even kicks in.
+#
+#    Fix: run `az deployment group create` in a background process
+#    (without --no-wait). The CLI sends the PUT successfully, ARM accepts
+#    the deployment, and then the CLI crashes during its polling loop.
+#    We don't care — we poll independently using `az deployment group
+#    show`, which is a simple GET and never triggers the bug.
 #
 #    Usage: az_deploy "label" "resource-group" "deploy-name" \
 #                     [extra az deployment group create flags …]
@@ -74,33 +78,55 @@ az_deploy() {
   local dname="$3"
   shift 3
 
-  print_step "Starting deployment: ${label}..."
+  print_step "Submitting deployment: ${label}..."
 
-  # The Azure CLI may print "The content for this response was already
-  # consumed" and exit non-zero even though ARM actually accepted the
-  # deployment. We therefore ignore the exit code, wait a few seconds
-  # for ARM to register the deployment, and then verify it exists.
   az deployment group create \
     --resource-group "${rg}" \
     --name "${dname}" \
-    --no-wait \
-    "$@" 2>&1 || true
+    --output none \
+    "$@" &>/dev/null &
+  local cli_pid=$!
 
-  sleep 5
+  # Wait for ARM to register the deployment (retry up to 60 s)
+  local found=false
+  local waited=0
+  while (( waited < 60 )); do
+    sleep 5
+    waited=$(( waited + 5 ))
 
-  local state
-  state=$(az deployment group show \
-    --resource-group "${rg}" \
-    --name "${dname}" \
-    --query properties.provisioningState -o tsv 2>/dev/null || echo "NotFound")
+    local state
+    state=$(az deployment group show \
+      --resource-group "${rg}" \
+      --name "${dname}" \
+      --query properties.provisioningState -o tsv 2>/dev/null || echo "NotFound")
 
-  if [[ "${state}" == "NotFound" ]]; then
-    print_error "${label} — deployment was not accepted by ARM. Check template errors above."
+    if [[ "${state}" != "NotFound" ]]; then
+      found=true
+      print_ok "${label} — accepted by ARM (state: ${state}). Polling..."
+      break
+    fi
+
+    printf "\r  ${CYAN}[WAIT]${NC} Waiting for ARM to accept %-30s %2ds..." "${label}" "${waited}"
+  done
+
+  if [[ "${found}" != "true" ]]; then
+    # CLI may have exited with a real template error
+    wait "${cli_pid}" 2>/dev/null || true
+    echo ""
+    print_error "${label} — deployment not found after 60 s."
+    print_error "Possible template error. Run manually for details:"
+    print_error "  az deployment group create --resource-group ${rg} --name ${dname} --template-file <template> --parameters <params> --debug"
     return 1
   fi
 
-  print_ok "${label} — accepted by ARM (state: ${state}). Polling..."
   _wait_deployment "${rg}" "${dname}" "${label}"
+  local rc=$?
+
+  # Clean up the background CLI process (it may still be polling)
+  kill "${cli_pid}" 2>/dev/null
+  wait "${cli_pid}" 2>/dev/null || true
+
+  return "${rc}"
 }
 
 # ── Poll a deployment until it reaches a terminal state ──────

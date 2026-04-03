@@ -53,16 +53,13 @@ pip_exists()        { az network public-ip show --resource-group "$1" --name "$2
 dns_zone_exists()   { az network dns zone show --resource-group "$1" --name "$2"         &>/dev/null; }
 tm_profile_exists() { az network traffic-manager profile show --resource-group "$1" --name "$2" &>/dev/null; }
 
-# ── Deploy wrapper: --no-wait + manual polling ───────────────
+# ── Deploy wrapper: background CLI + independent polling
 #
 #    "The content for this response was already consumed" is an Azure CLI
-#    SDK bug triggered when ARM's async streaming response body is read
-#    twice during long-running deployments. --output none does NOT help
-#    because the read happens inside the ARM polling layer.
+#    SDK bug. The crash happens AFTER the initial PUT is accepted by ARM.
 #
-#    Fix: --no-wait exits immediately after ARM accepts the request.
-#    We poll az deployment group show until the deployment reaches a
-#    terminal state (Succeeded / Failed / Canceled).
+#    Fix: run the CLI in a background process, then poll independently
+#    using az deployment group show (a simple GET, never triggers the bug).
 #
 #    Usage: az_deploy "label" "resource-group" "deploy-name" \
 #                     [extra az deployment group create flags …]
@@ -72,29 +69,51 @@ az_deploy() {
   local dname="$3"
   shift 3
 
-  print_step "Starting deployment: ${label}..."
+  print_step "Submitting deployment: ${label}..."
 
   az deployment group create \
     --resource-group "${rg}" \
     --name "${dname}" \
-    --no-wait \
-    "$@" 2>&1 || true
+    --output none \
+    "$@" &>/dev/null &
+  local cli_pid=$!
 
-  sleep 5
+  local found=false
+  local waited=0
+  while (( waited < 60 )); do
+    sleep 5
+    waited=$(( waited + 5 ))
 
-  local state
-  state=$(az deployment group show \
-    --resource-group "${rg}" \
-    --name "${dname}" \
-    --query properties.provisioningState -o tsv 2>/dev/null || echo "NotFound")
+    local state
+    state=$(az deployment group show \
+      --resource-group "${rg}" \
+      --name "${dname}" \
+      --query properties.provisioningState -o tsv 2>/dev/null || echo "NotFound")
 
-  if [[ "${state}" == "NotFound" ]]; then
-    print_error "${label} — deployment was not accepted by ARM. Check template errors above."
+    if [[ "${state}" != "NotFound" ]]; then
+      found=true
+      print_ok "${label} — accepted by ARM (state: ${state}). Polling..."
+      break
+    fi
+
+    printf "\r  ${CYAN}[WAIT]${NC} Waiting for ARM to accept %-30s %2ds..." "${label}" "${waited}"
+  done
+
+  if [[ "${found}" != "true" ]]; then
+    wait "${cli_pid}" 2>/dev/null || true
+    echo ""
+    print_error "${label} — deployment not found after 60 s."
+    print_error "Possible template error. Run with --debug for details."
     return 1
   fi
 
-  print_ok "${label} — accepted by ARM (state: ${state}). Polling..."
   _wait_deployment "${rg}" "${dname}" "${label}"
+  local rc=$?
+
+  kill "${cli_pid}" 2>/dev/null
+  wait "${cli_pid}" 2>/dev/null || true
+
+  return "${rc}"
 }
 
 # ── Poll a deployment until it reaches a terminal state ──────
