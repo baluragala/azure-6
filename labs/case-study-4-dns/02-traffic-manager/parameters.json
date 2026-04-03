@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "companyPrefix": {
+      "value": "shopeasy"
+    },
+    "eastUsPublicIpId": {
+      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-shopeasy-us/providers/Microsoft.Network/publicIPAddresses/pip-lb-us-prod"
+    },
+    "westEuropePublicIpId": {
+      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-shopeasy-eu/providers/Microsoft.Network/publicIPAddresses/pip-lb-eu-prod"
+    },
+    "seAsiaPublicIpId": {
+      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-shopeasy-ap/providers/Microsoft.Network/publicIPAddresses/pip-lb-ap-prod"
+    },
+    "dnsTtl": {
+      "value": 60
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# Azure credentials and sensitive files
+*.env
+*.env.*
+.azure/
+azure.json
+credentials.json
+
+# Bicep build output
+*.compiled.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.vscode/
+*.code-workspace
+
+# Word documents (large binary, source of truth is the generated labs)
+*.docx

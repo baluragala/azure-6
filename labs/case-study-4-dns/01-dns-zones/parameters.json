@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "domainName": {
+      "value": "shopeasy.example.com"
+    },
+    "environment": {
+      "value": "prod"
+    },
+    "vnetId": {
+      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-shopeasy-dns/providers/Microsoft.Network/virtualNetworks/vnet-shopeasy-prod"
+    },
+    "lbPublicIp": {
+      "value": "20.10.5.100"
+    },
+    "eastUsLbIp": {
+      "value": "20.10.5.100"
+    },
+    "westEuropeLbIp": {
+      "value": "52.174.5.200"
+    },
+    "seAsiaLbIp": {
+      "value": "20.195.10.50"
+    }
+  }
+}
