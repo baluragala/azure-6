@@ -255,8 +255,22 @@ resource webVmExtension 'Microsoft.Compute/virtualMachines/extensions@2023-03-01
     autoUpgradeMinorVersion: true
     settings: {
       script: base64('''#!/bin/bash
+set -e
+
+# Wait for any existing apt/dpkg locks (unattended-upgrades on first boot)
+for i in $(seq 1 30); do
+  if fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+     fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+    echo "Waiting for apt lock to release... attempt $i/30"
+    sleep 10
+  else
+    break
+  fi
+done
+
 apt-get update -y
-apt-get install -y nginx
+apt-get install -y -o DPkg::Lock::Timeout=120 nginx
+
 cat > /etc/nginx/sites-available/default << 'NGINX'
 server {
     listen 80;
