@@ -20,7 +20,7 @@ Azure Traffic Manager is a **DNS-based global traffic load balancer**. It distri
 
 Client ──DNS Query──▶ Traffic Manager
        ◀──Returns IP──
-Client ──────────────────────────────▶ Endpoint (Azure/AWS/on-prem)
+Client ──────────────────────────────▶ Endpoint (Azure Public IP / LB)
 ```
 
 ---
@@ -32,21 +32,19 @@ Client ────────────────────────�
 Routes all traffic to the primary endpoint. Fails over to secondary if primary is unhealthy.
 
 ```
-Priority 1: AWS Primary Endpoint     ← All traffic here normally
-Priority 2: Azure DR Endpoint        ← Only if Priority 1 fails
-Priority 3: Azure West US (backup)   ← Last resort
+Priority 1: East US (Primary)        ← All traffic here normally
+Priority 2: East US 2 (DR)           ← Only if Priority 1 fails
 ```
 
-**Use case:** CloudInnovate cross-cloud disaster recovery
+**Use case:** CloudInnovate dual-region disaster recovery
 
 ### Performance Routing
 
 Routes users to the endpoint with the **lowest latency** (closest data center).
 
 ```
-User in Asia     → Singapore endpoint
-User in Europe   → West Europe endpoint
 User in US East  → East US endpoint
+User in US South → East US 2 endpoint
 ```
 
 **Use case:** Global SaaS apps where latency is critical
@@ -56,9 +54,8 @@ User in US East  → East US endpoint
 Routes based on the **geographic region** of the DNS query origin.
 
 ```
-Queries from EU    → eu.shopeasy.com endpoint
-Queries from US    → us.shopeasy.com endpoint
-Queries from APAC  → ap.shopeasy.com endpoint
+Queries from NA/SA → East US endpoint
+Queries from WORLD → East US 2 endpoint
 ```
 
 **Use case:** Data sovereignty requirements, regional compliance
@@ -99,8 +96,8 @@ Traffic Manager supports three endpoint types:
 
 | Type | Description | Example |
 |------|-------------|---------|
-| **Azure Endpoints** | Azure resources with public IPs | App Service, Cloud Service, Public IP |
-| **External Endpoints** | Non-Azure resources | AWS ALB, on-prem server |
+| **Azure Endpoints** | Azure resources with public IPs | Public IP, Load Balancer |
+| **External Endpoints** | Non-Azure resources | On-prem server, third-party CDN |
 | **Nested Endpoints** | Another Traffic Manager profile | Combine routing methods |
 
 ---
@@ -150,107 +147,106 @@ Traffic rerouted
 ### Linux / macOS (Azure CLI)
 
 ```bash
-# Create Traffic Manager profile
+# Create Traffic Manager profile (priority failover)
 az network traffic-manager profile create \
-  --resource-group rg-tm \
-  --name tm-cloudinn \
+  --resource-group rg-cloudinn-primary-prod \
+  --name tm-cloudinn-priority \
   --routing-method Priority \
-  --unique-dns-name cloudinn-global \
+  --unique-dns-name cloudinn-failover \
   --ttl 30 \
   --monitor-protocol HTTPS \
   --monitor-port 443 \
   --monitor-path "/health"
 
-# Add Azure endpoint
+# Add East US primary endpoint (Priority 1)
 az network traffic-manager endpoint create \
-  --resource-group rg-tm \
-  --profile-name tm-cloudinn \
-  --name endpoint-azure-dr \
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-priority \
+  --name endpoint-primary \
   --type azureEndpoints \
-  --target-resource-id /subscriptions/{sub-id}/resourceGroups/rg-dr/providers/Microsoft.Network/publicIPAddresses/pip-dr \
-  --priority 2 \
+  --target-resource-id /subscriptions/{sub-id}/resourceGroups/rg-cloudinn-primary-prod/providers/Microsoft.Network/publicIPAddresses/pip-lb-prod \
+  --priority 1 \
   --endpoint-status Enabled
 
-# Add External endpoint (for AWS primary)
+# Add East US 2 DR endpoint (Priority 2)
 az network traffic-manager endpoint create \
-  --resource-group rg-tm \
-  --name endpoint-aws-primary \
-  --profile-name tm-cloudinn \
-  --type externalEndpoints \
-  --target "52.90.100.200" \
-  --endpoint-location "East US" \
-  --priority 1 \
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-priority \
+  --name endpoint-dr \
+  --type azureEndpoints \
+  --target-resource-id /subscriptions/{sub-id}/resourceGroups/rg-cloudinn-dr-prod/providers/Microsoft.Network/publicIPAddresses/pip-lb-prod \
+  --priority 2 \
   --endpoint-status Enabled
 
 # Check endpoint health
 az network traffic-manager endpoint show \
-  --resource-group rg-tm \
-  --profile-name tm-cloudinn \
-  --name endpoint-aws-primary \
-  --type externalEndpoints \
-  --query "properties.endpointMonitorStatus"
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-priority \
+  --name endpoint-primary \
+  --type azureEndpoints \
+  --query "endpointMonitorStatus"
 
-# Disable endpoint (simulate failover)
+# Disable primary (simulate failover to East US 2)
 az network traffic-manager endpoint update \
-  --resource-group rg-tm \
-  --profile-name tm-cloudinn \
-  --name endpoint-aws-primary \
-  --type externalEndpoints \
-  --endpoint-status Disabled
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-priority \
+  --name endpoint-primary \
+  --type azureEndpoints \
+  --endpoint-status Disabled \
+  --output none
 
 # Verify Traffic Manager DNS
-nslookup cloudinn-global.trafficmanager.net
-dig cloudinn-global.trafficmanager.net
+nslookup cloudinn-failover.trafficmanager.net
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-# Create Traffic Manager profile
+# Create Traffic Manager profile (priority failover)
 New-AzTrafficManagerProfile `
-  -Name "tm-cloudinn" `
-  -ResourceGroupName "rg-tm" `
+  -Name "tm-cloudinn-priority" `
+  -ResourceGroupName "rg-cloudinn-primary-prod" `
   -TrafficRoutingMethod "Priority" `
-  -RelativeDnsName "cloudinn-global" `
+  -RelativeDnsName "cloudinn-failover" `
   -Ttl 30 `
   -MonitorProtocol "HTTPS" `
   -MonitorPort 443 `
   -MonitorPath "/health"
 
-# Add external endpoint (AWS primary)
-New-AzTrafficManagerExternalEndpoint `
-  -Name "endpoint-aws-primary" `
-  -ProfileName "tm-cloudinn" `
-  -ResourceGroupName "rg-tm" `
-  -Target "52.90.100.200" `
-  -EndpointLocation "East US" `
+# Add East US primary endpoint (Priority 1)
+$pipPrimary = Get-AzPublicIpAddress -Name "pip-lb-prod" -ResourceGroupName "rg-cloudinn-primary-prod"
+New-AzTrafficManagerAzureEndpoint `
+  -Name "endpoint-primary" `
+  -ProfileName "tm-cloudinn-priority" `
+  -ResourceGroupName "rg-cloudinn-primary-prod" `
+  -TargetResourceId $pipPrimary.Id `
   -Priority 1
 
-# Add Azure endpoint (DR)
-$pip = Get-AzPublicIpAddress -Name "pip-dr" -ResourceGroupName "rg-dr"
+# Add East US 2 DR endpoint (Priority 2)
+$pipDr = Get-AzPublicIpAddress -Name "pip-lb-prod" -ResourceGroupName "rg-cloudinn-dr-prod"
 New-AzTrafficManagerAzureEndpoint `
-  -Name "endpoint-azure-dr" `
-  -ProfileName "tm-cloudinn" `
-  -ResourceGroupName "rg-tm" `
-  -TargetResourceId $pip.Id `
+  -Name "endpoint-dr" `
+  -ProfileName "tm-cloudinn-priority" `
+  -ResourceGroupName "rg-cloudinn-primary-prod" `
+  -TargetResourceId $pipDr.Id `
   -Priority 2
 
 # Check endpoint status
 Get-AzTrafficManagerEndpoint `
-  -Name "endpoint-aws-primary" `
-  -ProfileName "tm-cloudinn" `
-  -ResourceGroupName "rg-tm" `
-  -Type ExternalEndpoints | Select-Object Name, EndpointMonitorStatus
+  -Name "endpoint-primary" `
+  -ProfileName "tm-cloudinn-priority" `
+  -ResourceGroupName "rg-cloudinn-primary-prod" `
+  -Type AzureEndpoints | Select-Object Name, EndpointMonitorStatus
 
-# Disable endpoint (simulate failover)
+# Disable primary (simulate failover)
 $ep = Get-AzTrafficManagerEndpoint `
-  -Name "endpoint-aws-primary" `
-  -ProfileName "tm-cloudinn" `
-  -ResourceGroupName "rg-tm" `
-  -Type ExternalEndpoints
+  -Name "endpoint-primary" `
+  -ProfileName "tm-cloudinn-priority" `
+  -ResourceGroupName "rg-cloudinn-primary-prod" `
+  -Type AzureEndpoints
 $ep.EndpointStatus = "Disabled"
 Set-AzTrafficManagerEndpoint -TrafficManagerEndpoint $ep
 
 # Test DNS
-Resolve-DnsName -Name "cloudinn-global.trafficmanager.net"
+Resolve-DnsName -Name "cloudinn-failover.trafficmanager.net"
 ```

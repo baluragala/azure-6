@@ -108,7 +108,6 @@ function Register-AzureProviders {
         "Microsoft.Network",
         "Microsoft.Compute",
         "Microsoft.Storage",
-        "Microsoft.Sql",
         "Microsoft.RecoveryServices"
     )
 

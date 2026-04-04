@@ -34,7 +34,7 @@ Lower RPO/RTO = better DR but higher cost.
 
 ---
 
-## Cross-Cloud DR Architecture (AWS → Azure)
+## Azure Dual-Region DR Architecture (East US → East US 2)
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -44,35 +44,26 @@ Lower RPO/RTO = better DR but higher cost.
                     └──────────┬──────────────────┬───────────┘
                                │                  │
                     Priority 1 │         Priority 2│
+                    (Active)   │          (Standby)│
                                ▼                  ▼
               ┌────────────────────┐   ┌──────────────────────┐
-              │   AWS Primary      │   │   Azure DR           │
-              │   us-east-1        │   │   East US            │
-              │                    │   │                      │
-              │  ┌──────────────┐  │   │  ┌────────────────┐ │
-              │  │  Web Tier    │  │   │  │  Web Tier      │ │
-              │  │  (EC2/ALB)   │  │   │  │  (VMs/LB)      │ │
-              │  └──────┬───────┘  │   │  └────────┬───────┘ │
-              │         │          │   │           │         │
-              │  ┌──────▼───────┐  │   │  ┌────────▼───────┐ │
-              │  │  App Tier    │  │   │  │  App Tier      │ │
-              │  │  (EC2)       │  │   │  │  (VMs)         │ │
-              │  └──────┬───────┘  │   │  └────────┬───────┘ │
-              │         │          │   │           │         │
-              │  ┌──────▼───────┐  │   │  ┌────────▼───────┐ │
-              │  │  DB Tier     │  │   │  │  DB Tier       │ │
-              │  │  (RDS)       │◄─┼───┼──►  (Azure SQL)   │ │
-              │  └──────────────┘  │   │  └────────────────┘ │
-              │                    │   │                      │
-              │  Route53           │   │  Azure DNS           │
-              │  internal.corp     │   │  internal.azure      │
-              └────────────────────┘   └──────────────────────┘
-                                              │
-                                   ┌──────────▼──────────┐
-                                   │  ARM Templates       │
-                                   │  (Auto-deploy DR     │
-                                   │   on failover)       │
-                                   └─────────────────────┘
+              │   East US          │   │   East US 2           │
+              │   (Primary)        │   │   (DR Standby)        │
+              │                    │   │                       │
+              │  ┌──────────────┐  │   │  ┌────────────────┐  │
+              │  │  Web Tier    │  │   │  │  Web Tier      │  │
+              │  │  (VMs/LB)    │  │   │  │  (VMs/LB)      │  │
+              │  └──────┬───────┘  │   │  └────────┬───────┘  │
+              │         │          │   │           │          │
+              │  ┌──────▼───────┐  │   │  ┌────────▼───────┐  │
+              │  │  App Tier    │  │   │  │  App Tier      │  │
+              │  │  (VMs)       │  │   │  │  (VMs)         │  │
+              │  └──────────────┘  │   │  └────────────────┘  │
+              │                    │   │                       │
+              │  Storage (LRS)     │   │  Storage (LRS)        │
+              │  Azure DNS         │   │                       │
+              │  internal.azure    │   │                       │
+              └────────────────────┘   └───────────────────────┘
 ```
 
 ---
@@ -80,22 +71,22 @@ Lower RPO/RTO = better DR but higher cost.
 ## Failover Sequence
 
 ### Normal Operation
-1. Users hit `cloudinn-global.trafficmanager.net`
-2. Traffic Manager returns AWS endpoint (Priority 1, healthy)
-3. Users connect to AWS directly
+1. Users hit `cloudinn.trafficmanager.net`
+2. Traffic Manager returns East US endpoint (Priority 1, healthy)
+3. Users connect to East US Load Balancer
 
 ### During Failover
-1. AWS endpoint goes unhealthy (outage detected)
+1. East US endpoint goes unhealthy (outage detected)
 2. Traffic Manager probes fail (after ~90s detection window)
-3. Traffic Manager returns Azure DR endpoint (Priority 2)
-4. Users connect to Azure DR instead
+3. Traffic Manager returns East US 2 DR endpoint (Priority 2)
+4. Users connect to East US 2 instead
 5. DNS TTL (30s) ensures quick propagation
 
 ### After Recovery
-1. AWS endpoint becomes healthy again
+1. East US endpoint becomes healthy again
 2. Traffic Manager detects health restored
-3. Automatically fails back to AWS (Priority 1)
-4. Azure DR remains on standby
+3. Automatically fails back to East US (Priority 1)
+4. East US 2 remains on standby
 
 ---
 
@@ -138,36 +129,38 @@ For **VM-level replication**, Azure Site Recovery continuously replicates on-pre
 ```bash
 # Create recovery vault (for ASR/Backup)
 az backup vault create \
-  --resource-group rg-dr \
+  --resource-group rg-cloudinn-primary-prod \
   --name vault-cloudinn-dr \
   --location eastus
 
-# Simulate failover: Disable AWS endpoint in Traffic Manager
+# Simulate failover: Disable East US primary endpoint
 az network traffic-manager endpoint update \
-  --resource-group rg-tm \
-  --profile-name tm-cloudinn \
-  --name endpoint-aws-primary \
-  --type externalEndpoints \
-  --endpoint-status Disabled
-
-# Check that Azure DR endpoint is now active
-az network traffic-manager endpoint show \
-  --resource-group rg-tm \
-  --profile-name tm-cloudinn \
-  --name endpoint-azure-dr \
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-priority \
+  --name endpoint-primary \
   --type azureEndpoints \
-  --query "properties.endpointMonitorStatus"
+  --endpoint-status Disabled \
+  --output none
 
-# Verify DNS now returns Azure IP
-nslookup cloudinn-global.trafficmanager.net
+# Check that East US 2 DR endpoint is now active
+az network traffic-manager endpoint show \
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-priority \
+  --name endpoint-dr \
+  --type azureEndpoints \
+  --query "endpointMonitorStatus"
 
-# Re-enable AWS endpoint (simulate recovery)
+# Verify DNS now returns East US 2 IP
+nslookup cloudinn.trafficmanager.net
+
+# Re-enable East US endpoint (simulate recovery)
 az network traffic-manager endpoint update \
-  --resource-group rg-tm \
-  --profile-name tm-cloudinn \
-  --name endpoint-aws-primary \
-  --type externalEndpoints \
-  --endpoint-status Enabled
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-priority \
+  --name endpoint-primary \
+  --type azureEndpoints \
+  --endpoint-status Enabled \
+  --output none
 ```
 
 ### Windows (PowerShell)
@@ -176,26 +169,26 @@ az network traffic-manager endpoint update \
 # Create backup vault
 New-AzRecoveryServicesVault `
   -Name "vault-cloudinn-dr" `
-  -ResourceGroupName "rg-dr" `
+  -ResourceGroupName "rg-cloudinn-primary-prod" `
   -Location "eastus"
 
-# Simulate failover
+# Simulate failover: Disable East US primary endpoint
 $ep = Get-AzTrafficManagerEndpoint `
-  -Name "endpoint-aws-primary" `
-  -ProfileName "tm-cloudinn" `
-  -ResourceGroupName "rg-tm" `
-  -Type ExternalEndpoints
+  -Name "endpoint-primary" `
+  -ProfileName "tm-cloudinn-priority" `
+  -ResourceGroupName "rg-cloudinn-primary-prod" `
+  -Type AzureEndpoints
 $ep.EndpointStatus = "Disabled"
 Set-AzTrafficManagerEndpoint -TrafficManagerEndpoint $ep
 
-# Verify DNS resolves to Azure
-Resolve-DnsName -Name "cloudinn-global.trafficmanager.net"
+# Verify DNS resolves to East US 2
+Resolve-DnsName -Name "cloudinn.trafficmanager.net"
 
-# Check Azure endpoint health
+# Check East US 2 DR endpoint health
 Get-AzTrafficManagerEndpoint `
-  -Name "endpoint-azure-dr" `
-  -ProfileName "tm-cloudinn" `
-  -ResourceGroupName "rg-tm" `
+  -Name "endpoint-dr" `
+  -ProfileName "tm-cloudinn-priority" `
+  -ResourceGroupName "rg-cloudinn-primary-prod" `
   -Type AzureEndpoints | Select-Object Name, EndpointMonitorStatus
 
 # Re-enable after testing

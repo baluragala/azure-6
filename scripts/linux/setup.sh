@@ -117,7 +117,6 @@ register_providers() {
     "Microsoft.Network"
     "Microsoft.Compute"
     "Microsoft.Storage"
-    "Microsoft.Sql"
     "Microsoft.RecoveryServices"
   )
 

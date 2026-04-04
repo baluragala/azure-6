@@ -16,7 +16,7 @@ By the end of this session, learners will be able to:
 2. Manage **Azure DNS** for both public and private name resolution
 3. Deploy infrastructure using **ARM Templates** and **Bicep**
 4. Configure **Azure Traffic Manager** for global traffic distribution and failover
-5. Implement **cross-cloud disaster recovery** (AWS → Azure failover)
+5. Implement **dual-region disaster recovery** (East US → East US 2 failover)
 6. Secure DNS with **DNSSEC** and geo-based routing
 
 ---
@@ -33,15 +33,15 @@ By the end of this session, learners will be able to:
 
 ## Case Studies
 
-### Case Study 1: Cloud-Native Disaster Recovery with Cross-Cloud Failover
+### Case Study 1: Azure Dual-Region Disaster Recovery
 
-**Scenario:** CloudInnovate (a global SaaS company) runs primary infrastructure on AWS and needs to fail over to Azure during outages.
+**Scenario:** CloudInnovate (a global SaaS company) needs a dual-region DR setup across East US (primary) and East US 2 (standby) with automatic failover.
 
 **Hands-On Tasks:**
-- Deploy Azure VNet with subnets mirroring AWS architecture
-- Configure Azure DNS and private DNS zones
-- Deploy ARM templates for VMs, databases, and storage
-- Implement Azure Traffic Manager for AWS↔Azure routing
+- Deploy Azure VNet with subnets in both regions
+- Configure Azure DNS (public and private zones)
+- Deploy ARM/Bicep templates for VMs, Load Balancer, and Storage
+- Implement Azure Traffic Manager for priority-based failover
 - Perform a live failover test
 
 📁 Lab files: `labs/case-study-1-dr/`
@@ -143,7 +143,7 @@ azure-6/
 │   ├── case-study-1-dr/               ← Disaster Recovery lab
 │   │   ├── 01-vnet/                   ← VNet & Subnet deployment
 │   │   ├── 02-dns/                    ← DNS zones setup
-│   │   ├── 03-arm-templates/          ← VM, DB, Storage templates
+│   │   ├── 03-arm-templates/          ← VM, LB, Storage templates
 │   │   └── 04-traffic-manager/        ← Traffic Manager config
 │   └── case-study-4-dns/              ← DNS Management lab
 │       ├── 01-dns-zones/              ← Public & Private DNS zones
