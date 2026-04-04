@@ -1,4 +1,4 @@
-# Architecture: Case Study 1 - Azure Dual-Region Disaster Recovery
+# Architecture: Case Study 3 - Azure Dual-Region Disaster Recovery
 
 ## Overview
 

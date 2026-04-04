@@ -1,4 +1,4 @@
-// Case Study 1 - Step 4: Traffic Manager for Azure dual-region DR failover
+// Case Study 3 - Step 4: Traffic Manager for Azure dual-region DR failover
 // Routes traffic between East US (primary) and East US 2 (DR standby)
 
 @description('Company prefix for unique DNS naming')

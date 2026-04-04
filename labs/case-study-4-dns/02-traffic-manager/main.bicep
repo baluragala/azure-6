@@ -117,7 +117,7 @@ resource tmPerfProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
 
 // ─── Priority Failover Profile ────────────────────────────────────────────────
 // East US primary (P1) → East US 2 DR standby (P2)
-// Mirrors the DR strategy from Case Study 1
+// Mirrors the DR strategy from Case Study 3
 
 resource tmFailoverProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
   name: 'tm-${companyPrefix}-failover'

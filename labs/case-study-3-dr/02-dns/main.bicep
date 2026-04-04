@@ -1,4 +1,4 @@
-// Case Study 1 - Step 2: DNS Zones for DR failover
+// Case Study 3 - Step 2: DNS Zones for DR failover
 // Creates Azure DNS zones for internal name resolution during failover
 
 @description('Azure region for deployment')

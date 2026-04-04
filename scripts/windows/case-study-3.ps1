@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 # ============================================================
-# Case Study 1: Azure Dual-Region Disaster Recovery
+# Case Study 3: Azure Dual-Region Disaster Recovery
 # Primary: East US  |  DR Standby: East US 2
 # Windows PowerShell Version
 # ============================================================
@@ -30,7 +30,7 @@ $RgDr               = "rg-$CompanyPrefix-dr-$Environment"
 $VnetName           = "$CompanyPrefix-vnet-$Environment"
 $LbPipName          = "pip-lb-$Environment"
 $TmProfileName      = "tm-$CompanyPrefix-dr"
-$LabDir             = Join-Path (Split-Path $PSScriptRoot -Parent) "labs\case-study-1-dr"
+$LabDir             = Join-Path (Split-Path $PSScriptRoot -Parent) "labs\case-study-3-dr"
 
 # ── Pre-flight checks ─────────────────────────────────────────
 function Invoke-Preflight {
@@ -334,7 +334,7 @@ function Remove-LabResources {
 function Show-Menu {
     Write-Host ""
     Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Blue
-    Write-Host "║  Case Study 1: Azure Dual-Region DR Lab             ║" -ForegroundColor Blue
+    Write-Host "║  Case Study 3: Azure Dual-Region DR Lab             ║" -ForegroundColor Blue
     Write-Host "║  Primary: East US  |  DR Standby: East US 2        ║" -ForegroundColor Blue
     Write-Host "╠══════════════════════════════════════════════════════╣" -ForegroundColor Blue
     Write-Host "║  1) Run full deployment (all steps)                 ║" -ForegroundColor Blue

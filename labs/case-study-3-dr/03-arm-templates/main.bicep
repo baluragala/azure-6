@@ -1,4 +1,4 @@
-// Case Study 1 - Step 3: Core Application Infrastructure (VMs, LB, Storage)
+// Case Study 3 - Step 3: Core Application Infrastructure (VMs, LB, Storage)
 // ARM-equivalent Bicep template for rapid DR deployment
 
 @description('Azure region')

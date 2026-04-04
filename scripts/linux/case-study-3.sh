@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Case Study 1: Azure Dual-Region Disaster Recovery
+# Case Study 3: Azure Dual-Region Disaster Recovery
 # Primary: East US  |  DR Standby: East US 2
 #
 # Best-practice hardening:
@@ -40,7 +40,7 @@ COMPANY_PREFIX="cloudinn"
 RESOURCE_GROUP_PRIMARY="rg-${COMPANY_PREFIX}-primary-${ENVIRONMENT}"
 RESOURCE_GROUP_DR="rg-${COMPANY_PREFIX}-dr-${ENVIRONMENT}"
 
-LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/labs/case-study-1-dr"
+LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/labs/case-study-3-dr"
 
 VNET_NAME="${COMPANY_PREFIX}-vnet-${ENVIRONMENT}"
 LB_PIP_NAME="pip-lb-${ENVIRONMENT}"
@@ -512,11 +512,11 @@ _deploy_infra() {
   local location="$2"
   local role="$3"
 
-  # Training default password — override with CS1_VM_PASSWORD env var.
+  # Training default password — override with CS3_VM_PASSWORD env var.
   # Azure requirements: 12+ chars, upper + lower + digit + symbol.
   local DEFAULT_PASSWORD="AzureLab@Train24!"
-  local VM_PASSWORD="${CS1_VM_PASSWORD:-${DEFAULT_PASSWORD}}"
-  print_warn "VM password: ${VM_PASSWORD:0:4}***  (export CS1_VM_PASSWORD=<pass> to override)"
+  local VM_PASSWORD="${CS3_VM_PASSWORD:-${DEFAULT_PASSWORD}}"
+  print_warn "VM password: ${VM_PASSWORD:0:4}***  (export CS3_VM_PASSWORD=<pass> to override)"
   print_warn "IMPORTANT: Change this password before any non-lab use."
 
   local _dname="deploy-infra-${role}-$(date +%Y%m%d%H%M%S)"
@@ -735,7 +735,7 @@ full_deploy() {
 show_menu() {
   echo ""
   echo -e "${BLUE}╔══════════════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║  Case Study 1: Azure Dual-Region DR Lab             ║${NC}"
+  echo -e "${BLUE}║  Case Study 3: Azure Dual-Region DR Lab             ║${NC}"
   echo -e "${BLUE}║  Primary: East US  |  DR Standby: East US 2        ║${NC}"
   echo -e "${BLUE}╠══════════════════════════════════════════════════════╣${NC}"
   echo -e "${BLUE}║  1) Run full deployment (all steps)                 ║${NC}"

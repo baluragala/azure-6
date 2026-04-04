@@ -1,4 +1,4 @@
-// Case Study 1 - Step 1: Virtual Network deployment
+// Case Study 3 - Step 1: Virtual Network deployment
 // Deploys a VNet with 3-tier subnet layout for DR failover
 
 @description('Azure region for deployment')

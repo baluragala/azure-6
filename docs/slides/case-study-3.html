@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case Study 3 — Azure Dual-Region Disaster Recovery</title>
+<style>
+  :root {
+    --azure: #0078D4;
+    --azure-dark: #005A9E;
+    --azure-light: #DEECF9;
+    --green: #107C10;
+    --red: #D13438;
+    --orange: #FF8C00;
+    --bg: #F5F5F5;
+    --text: #1B1B1B;
+    --code-bg: #1E1E1E;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { font-size:18px; }
+  body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); }
+
+  .slide {
+    display:none; min-height:100vh; padding:60px 80px;
+    flex-direction:column; justify-content:center;
+    animation: fadeIn .4s ease;
+  }
+  .slide.active { display:flex; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+
+  /* Title slide */
+  .slide.title { background:linear-gradient(135deg,var(--azure),var(--azure-dark)); color:#fff; align-items:center; text-align:center; }
+  .slide.title h1 { font-size:2.8rem; font-weight:700; margin-bottom:.3em; }
+  .slide.title h2 { font-size:1.4rem; font-weight:400; opacity:.9; }
+  .slide.title .badge { background:rgba(255,255,255,.2); border-radius:6px; padding:8px 20px; margin-top:1.5em; font-size:.9rem; }
+
+  h1 { font-size:2rem; color:var(--azure); margin-bottom:.8em; border-bottom:3px solid var(--azure); padding-bottom:.3em; }
+  h2 { font-size:1.4rem; color:var(--azure-dark); margin:1em 0 .5em; }
+  h3 { font-size:1.1rem; color:var(--text); margin:.8em 0 .4em; }
+  p, li { line-height:1.7; margin-bottom:.4em; }
+  ul, ol { padding-left:1.6em; }
+  li::marker { color:var(--azure); }
+
+  table { width:100%; border-collapse:collapse; margin:1em 0; font-size:.92rem; }
+  th { background:var(--azure); color:#fff; padding:10px 14px; text-align:left; }
+  td { padding:10px 14px; border-bottom:1px solid #ddd; }
+  tr:nth-child(even) { background:#f0f4f8; }
+
+  pre { background:var(--code-bg); color:#D4D4D4; padding:20px 24px; border-radius:8px; overflow-x:auto; font-size:.82rem; line-height:1.6; margin:1em 0; }
+  code { font-family:'Cascadia Code','Fira Code',monospace; }
+  .inline-code { background:#e8e8e8; padding:2px 6px; border-radius:4px; font-size:.88em; }
+
+  .arch-box { background:#fff; border:2px solid var(--azure); border-radius:10px; padding:24px; margin:1em 0; box-shadow:0 2px 8px rgba(0,0,0,.06); }
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:30px; margin:1em 0; }
+  .card { background:#fff; border-radius:10px; padding:20px 24px; box-shadow:0 2px 8px rgba(0,0,0,.06); border-left:4px solid var(--azure); }
+  .card.green { border-left-color:var(--green); }
+  .card.red { border-left-color:var(--red); }
+  .card.orange { border-left-color:var(--orange); }
+  .tag { display:inline-block; background:var(--azure-light); color:var(--azure-dark); padding:3px 10px; border-radius:4px; font-size:.78rem; font-weight:600; margin:2px 4px 2px 0; }
+  .tag.green { background:#E6F4E6; color:var(--green); }
+  .tag.red { background:#FDECEA; color:var(--red); }
+
+  .highlight { background:var(--azure-light); padding:16px 20px; border-radius:8px; border-left:4px solid var(--azure); margin:1em 0; }
+
+  .flow-step { display:flex; align-items:center; gap:12px; margin:.5em 0; }
+  .flow-num { width:36px; height:36px; background:var(--azure); color:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; flex-shrink:0; }
+
+  /* Nav */
+  .nav { position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid #ddd; padding:12px 30px; display:flex; justify-content:space-between; align-items:center; z-index:100; }
+  .nav button { background:var(--azure); color:#fff; border:none; padding:10px 24px; border-radius:6px; cursor:pointer; font-size:.9rem; font-weight:600; }
+  .nav button:hover { background:var(--azure-dark); }
+  .nav button:disabled { background:#ccc; cursor:default; }
+  .nav .counter { font-size:.85rem; color:#666; }
+
+  .img-center { text-align:center; margin:1.5em 0; }
+  .img-center img { max-width:90%; border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,.1); }
+</style>
+</head>
+<body>
+
+<!-- Slide 1: Title -->
+<div class="slide title active" id="s1">
+  <h1>Case Study 3</h1>
+  <h2>Azure Dual-Region Disaster Recovery</h2>
+  <div class="badge">CloudInnovate &mdash; East US (Primary) | East US 2 (DR Standby)</div>
+  <p style="margin-top:2em;opacity:.7;">Introduction to Azure &mdash; II &nbsp;|&nbsp; Hands-On Training</p>
+</div>
+
+<!-- Slide 2: Scenario -->
+<div class="slide" id="s2">
+  <h1>Scenario</h1>
+  <div class="highlight">
+    <strong>CloudInnovate</strong> is a global SaaS company that needs a fully automated disaster recovery setup entirely within Azure, using two regions allowed by subscription policy.
+  </div>
+  <div class="two-col" style="margin-top:1.5em;">
+    <div class="card green">
+      <h3>Primary &mdash; East US</h3>
+      <p>Serves <strong>all live traffic</strong> under normal conditions. Hosts the web tier, app tier, storage, and DNS zones.</p>
+    </div>
+    <div class="card orange">
+      <h3>DR Standby &mdash; East US 2</h3>
+      <p>Identical infrastructure kept <strong>warm on standby</strong>. Activated automatically by Traffic Manager when East US becomes unhealthy.</p>
+    </div>
+  </div>
+  <h2>Goals</h2>
+  <ul>
+    <li><strong>RTO:</strong> &lt; 60 seconds (DNS-based failover)</li>
+    <li><strong>RPO:</strong> Near zero for stateless workloads</li>
+    <li><strong>Automation:</strong> Fully declarative via Bicep / ARM templates</li>
+  </ul>
+</div>
+
+<!-- Slide 3: Key Concepts — DR -->
+<div class="slide" id="s3">
+  <h1>Key Concepts: Disaster Recovery</h1>
+  <table>
+    <tr><th>Metric</th><th>Definition</th><th>Example</th></tr>
+    <tr><td><strong>RPO</strong></td><td>Recovery Point Objective &mdash; max acceptable data loss</td><td>"We can lose 15 min of data"</td></tr>
+    <tr><td><strong>RTO</strong></td><td>Recovery Time Objective &mdash; max acceptable downtime</td><td>"Must be back within 1 hour"</td></tr>
+  </table>
+
+  <h2>DR Strategy Tiers</h2>
+  <div class="two-col">
+    <div class="card green">
+      <h3>Tier 1: Hot Standby</h3>
+      <p>Active-Active &bull; RPO ~0s, RTO ~0s<br>Cost: Highest (double infra running)<br><span class="tag green">Our lab uses Tier 2 (Warm)</span></p>
+    </div>
+    <div class="card orange">
+      <h3>Tier 2: Warm Standby</h3>
+      <p>Active-Passive &bull; RPO: minutes, RTO: minutes<br>Standby infra pre-deployed<br>Traffic Manager + pre-provisioned VMs</p>
+    </div>
+  </div>
+  <div class="card" style="margin-top:.5em;">
+    <h3>Tier 3: Cold Standby</h3>
+    <p>Backup &amp; Restore &bull; RPO: hours, RTO: hours &bull; Cost: Lowest<br>ARM templates + Azure Backup &mdash; deploy on demand</p>
+  </div>
+</div>
+
+<!-- Slide 4: Key Concepts — VNet & Subnets -->
+<div class="slide" id="s4">
+  <h1>Key Concepts: Virtual Networks</h1>
+  <div class="highlight">
+    <strong>VNet</strong> is the fundamental building block for private networking in Azure. It enables resources to communicate securely with each other, the internet, and on-premises networks.
+  </div>
+  <h2>Subnet Layout (per region)</h2>
+  <pre><code>VNet: 10.0.0.0/16  (65,536 addresses)
+├── subnet-web     10.0.1.0/24   (251 usable) &mdash; Web tier VMs + LB
+├── subnet-app     10.0.2.0/24   (251 usable) &mdash; Application tier VMs
+├── subnet-db      10.0.3.0/24   (251 usable) &mdash; Database tier
+└── subnet-gateway 10.0.4.0/27   (27 usable)  &mdash; VPN/ExpressRoute GW</code></pre>
+  <h2>Network Security Groups (NSGs)</h2>
+  <table>
+    <tr><th>Subnet</th><th>Rule</th><th>Source</th><th>Port</th></tr>
+    <tr><td>subnet-web</td><td>Allow HTTPS/HTTP</td><td>Internet</td><td>443, 80</td></tr>
+    <tr><td>subnet-app</td><td>Allow app traffic</td><td>10.0.1.0/24</td><td>8080</td></tr>
+    <tr><td>subnet-db</td><td>Allow DB traffic</td><td>10.0.2.0/24</td><td>5432</td></tr>
+  </table>
+</div>
+
+<!-- Slide 5: Key Concepts — Azure DNS -->
+<div class="slide" id="s5">
+  <h1>Key Concepts: Azure DNS</h1>
+  <div class="two-col">
+    <div class="card">
+      <h3>Public DNS Zone</h3>
+      <p><span class="inline-code">cloudinn-app.example.com</span></p>
+      <ul>
+        <li>Internet-facing domain resolution</li>
+        <li>A, CNAME, MX, TXT records</li>
+        <li>Hosted on Azure's global anycast network</li>
+        <li>NS records delegated from registrar</li>
+      </ul>
+    </div>
+    <div class="card green">
+      <h3>Private DNS Zone</h3>
+      <p><span class="inline-code">internal.cloudinn.azure</span></p>
+      <ul>
+        <li>Internal service discovery within VNet</li>
+        <li>Auto-registration of VM hostnames</li>
+        <li>Linked to primary VNet</li>
+        <li>Not reachable from the internet</li>
+      </ul>
+    </div>
+  </div>
+  <h2>DNS Delegation Flow</h2>
+  <div class="flow-step"><div class="flow-num">1</div><div>User queries <span class="inline-code">cloudinn-app.example.com</span></div></div>
+  <div class="flow-step"><div class="flow-num">2</div><div>Domain registrar NS records point to Azure DNS (<span class="inline-code">ns1-XX.azure-dns.com</span>)</div></div>
+  <div class="flow-step"><div class="flow-num">3</div><div>Azure DNS resolves and returns the A record (Load Balancer IP)</div></div>
+  <div class="flow-step"><div class="flow-num">4</div><div>Client connects directly to the Load Balancer</div></div>
+</div>
+
+<!-- Slide 6: Key Concepts — Traffic Manager -->
+<div class="slide" id="s6">
+  <h1>Key Concepts: Azure Traffic Manager</h1>
+  <div class="highlight">
+    <strong>DNS-based global traffic load balancer.</strong> It does NOT proxy traffic &mdash; it tells clients which endpoint IP to use via DNS. Clients connect directly to the endpoint.
+  </div>
+  <h2>Priority Routing (Our DR Strategy)</h2>
+  <pre><code>Priority 1: East US (Primary)     &larr; All traffic here normally
+Priority 2: East US 2 (DR)        &larr; Only if Priority 1 fails</code></pre>
+  <h2>Health Monitoring</h2>
+  <table>
+    <tr><th>Setting</th><th>Value</th></tr>
+    <tr><td>Protocol</td><td>HTTPS</td></tr>
+    <tr><td>Path</td><td>/health</td></tr>
+    <tr><td>Probe interval</td><td>10 seconds</td></tr>
+    <tr><td>Tolerated failures</td><td>2 consecutive</td></tr>
+    <tr><td>DNS TTL</td><td>30 seconds</td></tr>
+  </table>
+  <p style="margin-top:1em;"><strong>Worst-case failover time:</strong> ~20s detection + ~30s TTL = <span class="tag red">&lt; 60 seconds</span></p>
+</div>
+
+<!-- Slide 7: Key Concepts — IaC -->
+<div class="slide" id="s7">
+  <h1>Key Concepts: Infrastructure as Code (Bicep)</h1>
+  <div class="highlight">
+    <strong>Bicep</strong> is Azure's domain-specific language for deploying resources declaratively. It compiles to ARM JSON templates but is far more readable.
+  </div>
+  <h2>Why Bicep for DR?</h2>
+  <ul>
+    <li><strong>Repeatability:</strong> Deploy identical infrastructure in both regions from the same template</li>
+    <li><strong>Idempotent:</strong> Re-run safely &mdash; only changes what's different</li>
+    <li><strong>Version controlled:</strong> Infrastructure changes tracked in Git</li>
+    <li><strong>Modular:</strong> Separate templates for VNet, DNS, Infra, Traffic Manager</li>
+  </ul>
+  <h2>Lab Template Structure</h2>
+  <pre><code>labs/case-study-3-dr/
+├── 01-vnet/              &larr; VNet + Subnets + NSGs
+│   ├── main.bicep
+│   └── parameters.json
+├── 02-dns/               &larr; Public + Private DNS zones
+├── 03-arm-templates/     &larr; VMs, LB, Storage
+├── 04-traffic-manager/   &larr; Priority-based failover
+└── main.bicep            &larr; Orchestrator (subscription scope)</code></pre>
+</div>
+
+<!-- Slide 8: Architecture -->
+<div class="slide" id="s8">
+  <h1>Architecture Overview</h1>
+  <div class="img-center">
+    <img src="../architecture/case-study-3-dr-architecture.png" alt="Case Study 3 Architecture">
+  </div>
+</div>
+
+<!-- Slide 9: Architecture Detail -->
+<div class="slide" id="s9">
+  <h1>Architecture: Resource Map</h1>
+  <table>
+    <tr><th>Resource</th><th>Region</th><th>Description</th></tr>
+    <tr><td><span class="inline-code">vnet-cloudinn-prod</span></td><td>Both</td><td>VNet 10.0.0.0/16 with 4 subnets</td></tr>
+    <tr><td><span class="inline-code">nsg-web/app/db-prod</span></td><td>Both</td><td>NSGs for each tier</td></tr>
+    <tr><td><span class="inline-code">lb-web-prod</span></td><td>Both</td><td>Standard Load Balancer</td></tr>
+    <tr><td><span class="inline-code">pip-lb-prod</span></td><td>Both</td><td>Static Public IP &rarr; TM endpoint</td></tr>
+    <tr><td><span class="inline-code">vm-web-prod</span></td><td>Both</td><td>Ubuntu 22.04 + Nginx (Standard_B2ms)</td></tr>
+    <tr><td><span class="inline-code">vm-app-prod</span></td><td>Both</td><td>Ubuntu 22.04 app server (Standard_B2ms)</td></tr>
+    <tr><td><span class="inline-code">stcloudinn*</span></td><td>Both</td><td>Storage Account (Standard_LRS, Blob)</td></tr>
+    <tr><td><span class="inline-code">tm-cloudinn-dr</span></td><td>Global</td><td>Traffic Manager &mdash; Priority routing</td></tr>
+  </table>
+  <h2>Resource Groups</h2>
+  <div class="two-col">
+    <div class="card green"><strong>rg-cloudinn-primary-prod</strong><br>East US &mdash; VNet, VMs, LB, Storage, DNS, TM</div>
+    <div class="card orange"><strong>rg-cloudinn-dr-prod</strong><br>East US 2 &mdash; VNet, VMs, LB, Storage</div>
+  </div>
+</div>
+
+<!-- Slide 10: Security Layers -->
+<div class="slide" id="s10">
+  <h1>Security Architecture</h1>
+  <div class="flow-step"><div class="flow-num">1</div><div><strong>Network (NSGs)</strong> &mdash; Web: 443/80 from Internet &bull; App: 8080 from web subnet &bull; DB: 5432 from app subnet</div></div>
+  <div class="flow-step"><div class="flow-num">2</div><div><strong>VM Access</strong> &mdash; No public IPs on VMs; access via Azure Cloud Shell or JIT VM Access</div></div>
+  <div class="flow-step"><div class="flow-num">3</div><div><strong>Data</strong> &mdash; Storage: HTTPS only, TLS 1.2, no public blob access, encryption at rest</div></div>
+  <div class="flow-step"><div class="flow-num">4</div><div><strong>DNS</strong> &mdash; Public zone for internet-facing; Private zone for internal service discovery within VNet</div></div>
+
+  <h2 style="margin-top:1.5em;">Allowed SKUs (Subscription Policy)</h2>
+  <table>
+    <tr><th>Service</th><th>Allowed SKUs</th></tr>
+    <tr><td>Virtual Machines</td><td>Standard_B2ms, Standard_B1ms, Standard_B4ms, Standard_D2_v3, Standard_DS1_v2</td></tr>
+    <tr><td>Storage</td><td>Standard_LRS, Premium_LRS</td></tr>
+    <tr><td>Load Balancer</td><td>Basic, Standard</td></tr>
+    <tr><td>Regions</td><td>East US, East US 2 <strong>only</strong></td></tr>
+  </table>
+</div>
+
+<!-- Slide 11: Failover Flow -->
+<div class="slide" id="s11">
+  <h1>Failover Sequence</h1>
+  <h2>Normal State</h2>
+  <pre><code>User &rarr; DNS Query &rarr; Traffic Manager &rarr; Returns East US LB IP &rarr; User &rarr; East US</code></pre>
+
+  <h2>Failover Event (East US outage)</h2>
+  <div class="flow-step"><div class="flow-num">1</div><div>Traffic Manager probes East US endpoint every 10s via HTTPS /health</div></div>
+  <div class="flow-step"><div class="flow-num">2</div><div>After 2 consecutive failures (~20s), endpoint marked <span class="tag red">Degraded</span></div></div>
+  <div class="flow-step"><div class="flow-num">3</div><div>Traffic Manager returns East US 2 IP for all new DNS queries</div></div>
+  <div class="flow-step"><div class="flow-num">4</div><div>TTL = 30s &rarr; propagates globally within ~30 seconds</div></div>
+  <div class="flow-step"><div class="flow-num">5</div><div>New clients connect to <span class="tag green">East US 2</span> automatically</div></div>
+
+  <h2>Failback (East US recovers)</h2>
+  <div class="flow-step"><div class="flow-num">1</div><div>Probes succeed again (2 consecutive) &rarr; East US reactivates as Priority 1</div></div>
+  <div class="flow-step"><div class="flow-num">2</div><div>DNS returns East US IP &bull; East US 2 returns to warm standby</div></div>
+</div>
+
+<!-- Slide 12: Hands-On Lab Steps -->
+<div class="slide" id="s12">
+  <h1>Hands-On Lab Steps</h1>
+  <div class="flow-step"><div class="flow-num">1</div><div><strong>Create Resource Groups</strong> &mdash; <span class="inline-code">rg-cloudinn-primary-prod</span> (East US) and <span class="inline-code">rg-cloudinn-dr-prod</span> (East US 2)</div></div>
+  <div class="flow-step"><div class="flow-num">2</div><div><strong>Deploy VNets</strong> &mdash; Same VNet/Subnet layout in both regions (01-vnet/main.bicep)</div></div>
+  <div class="flow-step"><div class="flow-num">3</div><div><strong>Deploy DNS Zones</strong> &mdash; Public + Private DNS zones linked to primary VNet (02-dns/main.bicep)</div></div>
+  <div class="flow-step"><div class="flow-num">4</div><div><strong>Deploy Infrastructure</strong> &mdash; VMs, LB, Storage in both regions (03-arm-templates/main.bicep)</div></div>
+  <div class="flow-step"><div class="flow-num">5</div><div><strong>Deploy Traffic Manager</strong> &mdash; Priority routing: P1=East US, P2=East US 2 (04-traffic-manager/main.bicep)</div></div>
+  <div class="flow-step"><div class="flow-num">6</div><div><strong>Failover Test</strong> &mdash; Disable East US endpoint, verify DNS switches to East US 2, re-enable</div></div>
+
+  <h2 style="margin-top:1.5em;">Run the Lab</h2>
+  <pre><code># Linux / macOS
+./scripts/linux/case-study-3.sh
+
+# Windows (PowerShell)
+.\scripts\windows\case-study-3.ps1</code></pre>
+</div>
+
+<!-- Slide 13: Failover Test Commands -->
+<div class="slide" id="s13">
+  <h1>Failover Test: CLI Commands</h1>
+  <h2>Linux / macOS (Azure CLI)</h2>
+  <pre><code># Get Traffic Manager FQDN
+TM_FQDN=$(az network traffic-manager profile show \
+  --resource-group rg-cloudinn-primary-prod \
+  --name tm-cloudinn-dr \
+  --query dnsConfig.fqdn -o tsv)
+
+# Before failover — should return East US IP
+nslookup $TM_FQDN
+
+# Simulate outage: disable East US endpoint
+az network traffic-manager endpoint update \
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-dr \
+  --name endpoint-eastus-primary \
+  --type azureEndpoints \
+  --endpoint-status Disabled
+
+# Wait ~60s then verify — should return East US 2 IP
+sleep 60 && nslookup $TM_FQDN
+
+# Re-enable (failback)
+az network traffic-manager endpoint update \
+  --resource-group rg-cloudinn-primary-prod \
+  --profile-name tm-cloudinn-dr \
+  --name endpoint-eastus-primary \
+  --type azureEndpoints \
+  --endpoint-status Enabled</code></pre>
+</div>
+
+<!-- Slide 14: Key Takeaways -->
+<div class="slide" id="s14">
+  <h1>Key Takeaways</h1>
+  <div class="two-col">
+    <div class="card green">
+      <h3>Architecture</h3>
+      <ul>
+        <li>Active-Passive across two Azure regions</li>
+        <li>Identical infra in both regions (Bicep modules)</li>
+        <li>Traffic Manager = DNS-level failover</li>
+        <li>TTL 30s + 10s probes = ~50s max failover</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Concepts Covered</h3>
+      <ul>
+        <li>RPO / RTO and DR strategy tiers</li>
+        <li>VNets, Subnets, NSGs</li>
+        <li>Public &amp; Private Azure DNS</li>
+        <li>Azure Traffic Manager (Priority routing)</li>
+        <li>Infrastructure as Code with Bicep</li>
+      </ul>
+    </div>
+  </div>
+  <div class="highlight" style="margin-top:1.5em;text-align:center;">
+    <strong>Next:</strong> Case Study 4 &mdash; Global DNS Management with DNSSEC &amp; Multi-Routing
+  </div>
+</div>
+
+<!-- Navigation -->
+<div class="nav">
+  <button id="prev" onclick="navigate(-1)" disabled>&larr; Previous</button>
+  <span class="counter" id="counter">1 / 14</span>
+  <button id="next" onclick="navigate(1)">Next &rarr;</button>
+</div>
+
+<script>
+let current = 0;
+const slides = document.querySelectorAll('.slide');
+const total = slides.length;
+
+function navigate(dir) {
+  slides[current].classList.remove('active');
+  current = Math.max(0, Math.min(total - 1, current + dir));
+  slides[current].classList.add('active');
+  document.getElementById('counter').textContent = `${current + 1} / ${total}`;
+  document.getElementById('prev').disabled = current === 0;
+  document.getElementById('next').disabled = current === total - 1;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); navigate(1); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); navigate(-1); }
+  if (e.key === 'Home') { e.preventDefault(); slides[current].classList.remove('active'); current = 0; slides[0].classList.add('active'); navigate(0); }
+  if (e.key === 'End') { e.preventDefault(); slides[current].classList.remove('active'); current = total - 1; slides[current].classList.add('active'); navigate(0); }
+});
+</script>
+</body>
+</html>

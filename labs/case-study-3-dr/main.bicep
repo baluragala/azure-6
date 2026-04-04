@@ -1,4 +1,4 @@
-// Case Study 1: Azure Dual-Region Disaster Recovery
+// Case Study 3: Azure Dual-Region Disaster Recovery
 // Primary: East US  |  DR Standby: East US 2
 // Master orchestration template - deploys all components in order
 

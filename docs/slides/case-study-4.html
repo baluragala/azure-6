@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Case Study 4 — Global DNS Management &amp; DNSSEC</title>
+<style>
+  :root {
+    --azure: #0078D4;
+    --azure-dark: #005A9E;
+    --azure-light: #DEECF9;
+    --green: #107C10;
+    --red: #D13438;
+    --orange: #FF8C00;
+    --purple: #8661C5;
+    --bg: #F5F5F5;
+    --text: #1B1B1B;
+    --code-bg: #1E1E1E;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { font-size:18px; }
+  body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); }
+
+  .slide {
+    display:none; min-height:100vh; padding:60px 80px;
+    flex-direction:column; justify-content:center;
+    animation: fadeIn .4s ease;
+  }
+  .slide.active { display:flex; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+
+  .slide.title { background:linear-gradient(135deg,#005A9E,var(--purple)); color:#fff; align-items:center; text-align:center; }
+  .slide.title h1 { font-size:2.8rem; font-weight:700; margin-bottom:.3em; }
+  .slide.title h2 { font-size:1.4rem; font-weight:400; opacity:.9; }
+  .slide.title .badge { background:rgba(255,255,255,.2); border-radius:6px; padding:8px 20px; margin-top:1.5em; font-size:.9rem; }
+
+  h1 { font-size:2rem; color:var(--azure); margin-bottom:.8em; border-bottom:3px solid var(--azure); padding-bottom:.3em; }
+  h2 { font-size:1.4rem; color:var(--azure-dark); margin:1em 0 .5em; }
+  h3 { font-size:1.1rem; color:var(--text); margin:.8em 0 .4em; }
+  p, li { line-height:1.7; margin-bottom:.4em; }
+  ul, ol { padding-left:1.6em; }
+  li::marker { color:var(--azure); }
+
+  table { width:100%; border-collapse:collapse; margin:1em 0; font-size:.92rem; }
+  th { background:var(--azure); color:#fff; padding:10px 14px; text-align:left; }
+  td { padding:10px 14px; border-bottom:1px solid #ddd; }
+  tr:nth-child(even) { background:#f0f4f8; }
+
+  pre { background:var(--code-bg); color:#D4D4D4; padding:20px 24px; border-radius:8px; overflow-x:auto; font-size:.82rem; line-height:1.6; margin:1em 0; }
+  code { font-family:'Cascadia Code','Fira Code',monospace; }
+  .inline-code { background:#e8e8e8; padding:2px 6px; border-radius:4px; font-size:.88em; }
+
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:30px; margin:1em 0; }
+  .three-col { display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; margin:1em 0; }
+  .card { background:#fff; border-radius:10px; padding:20px 24px; box-shadow:0 2px 8px rgba(0,0,0,.06); border-left:4px solid var(--azure); }
+  .card.green { border-left-color:var(--green); }
+  .card.red { border-left-color:var(--red); }
+  .card.orange { border-left-color:var(--orange); }
+  .card.purple { border-left-color:var(--purple); }
+  .tag { display:inline-block; background:var(--azure-light); color:var(--azure-dark); padding:3px 10px; border-radius:4px; font-size:.78rem; font-weight:600; margin:2px 4px 2px 0; }
+  .tag.green { background:#E6F4E6; color:var(--green); }
+  .tag.red { background:#FDECEA; color:var(--red); }
+  .tag.purple { background:#F3EEFB; color:var(--purple); }
+
+  .highlight { background:var(--azure-light); padding:16px 20px; border-radius:8px; border-left:4px solid var(--azure); margin:1em 0; }
+
+  .flow-step { display:flex; align-items:center; gap:12px; margin:.5em 0; }
+  .flow-num { width:36px; height:36px; background:var(--azure); color:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; flex-shrink:0; }
+  .flow-num.purple { background:var(--purple); }
+
+  .nav { position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid #ddd; padding:12px 30px; display:flex; justify-content:space-between; align-items:center; z-index:100; }
+  .nav button { background:var(--azure); color:#fff; border:none; padding:10px 24px; border-radius:6px; cursor:pointer; font-size:.9rem; font-weight:600; }
+  .nav button:hover { background:var(--azure-dark); }
+  .nav button:disabled { background:#ccc; cursor:default; }
+  .nav .counter { font-size:.85rem; color:#666; }
+
+  .img-center { text-align:center; margin:1.5em 0; }
+  .img-center img { max-width:90%; border-radius:10px; box-shadow:0 4px 16px rgba(0,0,0,.1); }
+
+  .dns-record { display:flex; gap:10px; align-items:baseline; padding:6px 0; border-bottom:1px solid #eee; font-size:.92rem; }
+  .dns-type { width:60px; font-weight:700; color:var(--azure); }
+  .dns-name { width:80px; color:#666; }
+  .dns-value { flex:1; }
+</style>
+</head>
+<body>
+
+<!-- Slide 1: Title -->
+<div class="slide title active" id="s1">
+  <h1>Case Study 4</h1>
+  <h2>Scalable &amp; Secure DNS Management</h2>
+  <div class="badge">ShopEasy E-Commerce &mdash; Azure DNS &bull; Traffic Manager &bull; DNSSEC</div>
+  <p style="margin-top:2em;opacity:.7;">Introduction to Azure &mdash; II &nbsp;|&nbsp; Hands-On Training</p>
+</div>
+
+<!-- Slide 2: Scenario -->
+<div class="slide" id="s2">
+  <h1>Scenario</h1>
+  <div class="highlight">
+    <strong>ShopEasy</strong> is a multinational e-commerce company that needs highly available, globally distributed DNS with security protection against DNS spoofing.
+  </div>
+  <h2>Requirements</h2>
+  <ul>
+    <li>Host <span class="inline-code">shopeasy.example.com</span> on Azure DNS with full record management</li>
+    <li>Internal service discovery via private DNS zones</li>
+    <li>Geographic routing (NA/SA vs. rest of world)</li>
+    <li>Performance-based and priority failover routing</li>
+    <li>DNSSEC zone signing to prevent DNS spoofing</li>
+  </ul>
+  <div class="two-col" style="margin-top:1em;">
+    <div class="card green">
+      <h3>East US &mdash; Primary</h3>
+      <p>Primary endpoints, VNet with private DNS linked, auto-registration enabled</p>
+    </div>
+    <div class="card orange">
+      <h3>East US 2 &mdash; DR</h3>
+      <p>Secondary endpoints, VNet with private DNS linked, activated by Traffic Manager failover</p>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 3: Key Concepts — Azure DNS -->
+<div class="slide" id="s3">
+  <h1>Key Concepts: Azure DNS Zones</h1>
+  <div class="two-col">
+    <div class="card">
+      <h3>Public DNS Zone</h3>
+      <p>Hosts records that are resolvable from the internet.</p>
+      <ul>
+        <li>Hosted on Azure's global anycast name servers</li>
+        <li>100% SLA availability</li>
+        <li>Supports A, AAAA, CNAME, MX, TXT, SRV, CAA, NS</li>
+        <li>Requires NS delegation from registrar</li>
+      </ul>
+    </div>
+    <div class="card green">
+      <h3>Private DNS Zone</h3>
+      <p>Internal name resolution within Azure VNets.</p>
+      <ul>
+        <li>Linked to one or more VNets</li>
+        <li>Auto-registration of VM hostnames</li>
+        <li>Split-horizon DNS (same name, different internal IP)</li>
+        <li>Not reachable from the internet</li>
+      </ul>
+    </div>
+  </div>
+  <h2>NS Delegation Flow</h2>
+  <pre><code>Domain Registrar (GoDaddy / Namecheap)
+  └── NS Records: ns1-XX.azure-dns.com, ns2-XX.azure-dns.net, ...
+        └── Azure DNS resolves all queries for shopeasy.example.com</code></pre>
+</div>
+
+<!-- Slide 4: DNS Record Types -->
+<div class="slide" id="s4">
+  <h1>DNS Records: shopeasy.example.com</h1>
+  <div style="background:#fff;padding:24px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.06);">
+    <div class="dns-record"><div class="dns-type">A</div><div class="dns-name">@</div><div class="dns-value">20.10.5.100 <span class="tag">LB East US</span></div></div>
+    <div class="dns-record"><div class="dns-type">A</div><div class="dns-name">www</div><div class="dns-value">20.10.5.100</div></div>
+    <div class="dns-record"><div class="dns-type">A</div><div class="dns-name">us</div><div class="dns-value">20.10.5.100 <span class="tag green">East US primary</span></div></div>
+    <div class="dns-record"><div class="dns-type">A</div><div class="dns-name">dr</div><div class="dns-value">20.40.5.100 <span class="tag red">East US 2 DR</span></div></div>
+    <div class="dns-record"><div class="dns-type">CNAME</div><div class="dns-name">api</div><div class="dns-value">api-gw.shopeasy.example.com</div></div>
+    <div class="dns-record"><div class="dns-type">CNAME</div><div class="dns-name">cdn</div><div class="dns-value">shopeasy.azureedge.net <span class="tag">CDN</span></div></div>
+    <div class="dns-record"><div class="dns-type">MX</div><div class="dns-name">@</div><div class="dns-value">mail.protection.outlook.com <span class="tag">Email</span></div></div>
+    <div class="dns-record"><div class="dns-type">TXT</div><div class="dns-name">@</div><div class="dns-value">"v=spf1 include:spf.protection.outlook.com -all" <span class="tag">SPF</span></div></div>
+    <div class="dns-record"><div class="dns-type">CAA</div><div class="dns-name">@</div><div class="dns-value">0 issue "letsencrypt.org" <span class="tag purple">CA Auth</span></div></div>
+  </div>
+  <h2 style="margin-top:1em;">Private DNS Zone: corp.shopeasy.internal</h2>
+  <pre><code>order-service   &rarr; 10.0.2.10    product-service &rarr; 10.0.2.11
+db-master       &rarr; 10.0.3.4     db-replica      &rarr; 10.0.3.5
+redis           &rarr; 10.0.2.20</code></pre>
+</div>
+
+<!-- Slide 5: Traffic Manager Routing -->
+<div class="slide" id="s5">
+  <h1>Traffic Manager: Three Routing Profiles</h1>
+  <div class="three-col">
+    <div class="card">
+      <h3>Geographic</h3>
+      <p><span class="inline-code">tm-shopeasy-geo</span></p>
+      <table style="font-size:.82rem;">
+        <tr><th>Region</th><th>Endpoint</th></tr>
+        <tr><td>NA + SA</td><td>East US</td></tr>
+        <tr><td>WORLD</td><td>East US 2</td></tr>
+      </table>
+      <p style="font-size:.85rem;margin-top:.5em;">Routes by origin location of the DNS query</p>
+    </div>
+    <div class="card green">
+      <h3>Performance</h3>
+      <p><span class="inline-code">tm-shopeasy-perf</span></p>
+      <p style="margin-top:.5em;">Routes to the endpoint with <strong>lowest latency</strong> measured in real-time between East US and East US 2.</p>
+      <p style="font-size:.85rem;margin-top:.5em;">Azure measures latency from user's recursive resolver to each endpoint.</p>
+    </div>
+    <div class="card orange">
+      <h3>Priority (Failover)</h3>
+      <p><span class="inline-code">tm-shopeasy-failover</span></p>
+      <table style="font-size:.82rem;">
+        <tr><th>Priority</th><th>Endpoint</th></tr>
+        <tr><td>P1</td><td>East US</td></tr>
+        <tr><td>P2</td><td>East US 2</td></tr>
+      </table>
+      <p style="font-size:.85rem;margin-top:.5em;">Automatic failover on health probe failure</p>
+    </div>
+  </div>
+  <div class="highlight" style="margin-top:1em;">
+    <strong>Key difference from Case Study 3:</strong> Case Study 3 uses a single Priority profile. Case Study 4 demonstrates three different routing strategies for different use cases.
+  </div>
+</div>
+
+<!-- Slide 6: DNSSEC -->
+<div class="slide" id="s6">
+  <h1>Key Concepts: DNSSEC</h1>
+  <div class="highlight">
+    <strong>DNSSEC</strong> (DNS Security Extensions) adds cryptographic signatures to DNS records, preventing attackers from forging DNS responses (DNS spoofing / cache poisoning).
+  </div>
+  <h2>Chain of Trust</h2>
+  <div class="flow-step"><div class="flow-num purple">1</div><div><strong>Root Zone (.)</strong> &mdash; Signs the DS record for .com</div></div>
+  <div class="flow-step"><div class="flow-num purple">2</div><div><strong>.COM Zone</strong> &mdash; Signs the DS record for shopeasy.example.com</div></div>
+  <div class="flow-step"><div class="flow-num purple">3</div><div><strong>shopeasy.example.com</strong> &mdash; Azure signs with ECDSA P-256 key</div></div>
+  <div class="flow-step"><div class="flow-num purple">4</div><div><strong>Resolver validates:</strong> Fetch DNSKEY &rarr; Verify RRSIG &rarr; Match DS in parent &rarr; Trusted</div></div>
+
+  <h2>DNSSEC Record Types</h2>
+  <table>
+    <tr><th>Record</th><th>Purpose</th></tr>
+    <tr><td><strong>RRSIG</strong></td><td>Signature on each record set (proves authenticity)</td></tr>
+    <tr><td><strong>DNSKEY</strong></td><td>Public signing key (published in zone)</td></tr>
+    <tr><td><strong>DS</strong></td><td>Delegation Signer (links child zone to parent)</td></tr>
+    <tr><td><strong>NSEC/NSEC3</strong></td><td>Proves non-existence of a record (prevents enumeration)</td></tr>
+  </table>
+</div>
+
+<!-- Slide 7: Architecture Diagram -->
+<div class="slide" id="s7">
+  <h1>Architecture Overview</h1>
+  <div class="img-center">
+    <img src="../architecture/case-study-4-dns-architecture.png" alt="Case Study 4 DNS Architecture">
+  </div>
+</div>
+
+<!-- Slide 8: Multi-Tier DNS Resolution -->
+<div class="slide" id="s8">
+  <h1>Multi-Tier DNS Resolution</h1>
+  <div class="two-col">
+    <div class="card">
+      <h3>External Users (Public Zone)</h3>
+      <pre style="font-size:.8rem;"><code>shopeasy.example.com
+├── www  &rarr; 20.10.5.100
+├── us   &rarr; East US LB
+├── dr   &rarr; East US 2 LB
+├── api  &rarr; api-gw.FQDN
+└── cdn  &rarr; azureedge.net</code></pre>
+    </div>
+    <div class="card green">
+      <h3>Internal Services (Private Zone)</h3>
+      <pre style="font-size:.8rem;"><code>corp.shopeasy.internal
+├── order-service   &rarr; 10.0.2.10
+├── product-service &rarr; 10.0.2.11
+├── db-master       &rarr; 10.0.3.4
+├── db-replica      &rarr; 10.0.3.5
+└── redis           &rarr; 10.0.2.20</code></pre>
+    </div>
+  </div>
+  <h2>VNet Links</h2>
+  <table>
+    <tr><th>Link</th><th>VNet</th><th>Region</th><th>Auto-Register</th></tr>
+    <tr><td>link-shopeasy-vnet-eastus</td><td>vnet-shopeasy-prod</td><td>East US</td><td>ON</td></tr>
+    <tr><td>link-shopeasy-vnet-eastus2</td><td>vnet-shopeasy-dr</td><td>East US 2</td><td>OFF</td></tr>
+  </table>
+</div>
+
+<!-- Slide 9: Traffic Routing Table -->
+<div class="slide" id="s9">
+  <h1>Traffic Routing by User Location</h1>
+  <table>
+    <tr><th>User Location</th><th>TM Profile</th><th>Azure Region</th><th>IP</th></tr>
+    <tr><td>North America</td><td>tm-shopeasy-geo</td><td>East US</td><td>20.10.5.100</td></tr>
+    <tr><td>South America</td><td>tm-shopeasy-geo</td><td>East US</td><td>20.10.5.100</td></tr>
+    <tr><td>Europe / Asia / Africa</td><td>tm-shopeasy-geo (WORLD)</td><td>East US 2</td><td>20.40.5.100</td></tr>
+    <tr><td>Any user</td><td>tm-shopeasy-perf</td><td>Lowest latency</td><td>Varies</td></tr>
+    <tr><td>DNS Failure Test</td><td>tm-shopeasy-failover</td><td>P1: East US, P2: East US 2</td><td>Auto</td></tr>
+  </table>
+
+  <h2>Resource Map</h2>
+  <table>
+    <tr><th>Resource</th><th>Region</th><th>Purpose</th></tr>
+    <tr><td><span class="inline-code">shopeasy.example.com</span></td><td>Global</td><td>Public DNS Zone</td></tr>
+    <tr><td><span class="inline-code">corp.shopeasy.internal</span></td><td>Global</td><td>Private DNS Zone</td></tr>
+    <tr><td><span class="inline-code">pip-lb-us-prod</span></td><td>East US</td><td>Primary LB endpoint</td></tr>
+    <tr><td><span class="inline-code">pip-lb-eastus2-prod</span></td><td>East US 2</td><td>DR LB endpoint</td></tr>
+    <tr><td>3 Traffic Manager profiles</td><td>Global</td><td>Geo + Perf + Failover</td></tr>
+    <tr><td>DNSSEC Config</td><td>Global</td><td>Zone signing keys</td></tr>
+  </table>
+</div>
+
+<!-- Slide 10: DNS Failure Recovery -->
+<div class="slide" id="s10">
+  <h1>DNS Failure Recovery Flow</h1>
+  <h2>Normal State</h2>
+  <pre><code>Client &rarr; DNS: "shopeasy.example.com?"
+       &larr; DNS: "20.10.5.100 (East US)" [RRSIG verified &check;]</code></pre>
+
+  <h2>East US Failure</h2>
+  <div class="flow-step"><div class="flow-num">1</div><div>Traffic Manager probes East US every 10s</div></div>
+  <div class="flow-step"><div class="flow-num">2</div><div>After 2 failures (~20s), East US marked <span class="tag red">Degraded</span></div></div>
+  <div class="flow-step"><div class="flow-num">3</div><div>Priority failover: next query returns <span class="tag green">East US 2</span> IP (20.40.5.100)</div></div>
+  <div class="flow-step"><div class="flow-num">4</div><div>TTL=30s &rarr; full propagation in ~30 seconds</div></div>
+
+  <h2>Auto Recovery</h2>
+  <div class="flow-step"><div class="flow-num">1</div><div>East US probes succeed again (2 consecutive)</div></div>
+  <div class="flow-step"><div class="flow-num">2</div><div>Traffic Manager re-enables East US &rarr; DNS returns primary IP</div></div>
+  <div class="flow-step"><div class="flow-num">3</div><div>Global users return to East US within ~60 seconds</div></div>
+</div>
+
+<!-- Slide 11: Hands-On Lab Steps -->
+<div class="slide" id="s11">
+  <h1>Hands-On Lab Steps</h1>
+  <div class="flow-step"><div class="flow-num">1</div><div><strong>Pre-flight &amp; Resource Groups</strong> &mdash; Create <span class="inline-code">rg-shopeasy-dns</span>, <span class="inline-code">rg-shopeasy-us</span>, <span class="inline-code">rg-shopeasy-eastus2</span></div></div>
+  <div class="flow-step"><div class="flow-num">2</div><div><strong>Deploy VNets</strong> &mdash; <span class="inline-code">vnet-shopeasy-prod</span> (East US) + <span class="inline-code">vnet-shopeasy-dr</span> (East US 2)</div></div>
+  <div class="flow-step"><div class="flow-num">3</div><div><strong>Deploy DNS Zones</strong> &mdash; Public + Private zones with all records (01-dns-zones/main.bicep)</div></div>
+  <div class="flow-step"><div class="flow-num">4</div><div><strong>Create Regional Public IPs</strong> &mdash; Static IPs for both regions</div></div>
+  <div class="flow-step"><div class="flow-num">5</div><div><strong>Deploy Traffic Manager</strong> &mdash; 3 profiles: Geographic, Performance, Priority (02-traffic-manager/main.bicep)</div></div>
+  <div class="flow-step"><div class="flow-num">6</div><div><strong>Enable DNSSEC</strong> &mdash; Zone signing with ECDSA P-256 (03-dnssec/main.bicep)</div></div>
+  <div class="flow-step"><div class="flow-num">7</div><div><strong>DNS Queries &amp; Failover Test</strong> &mdash; Verify records, simulate failure, confirm recovery</div></div>
+
+  <h2 style="margin-top:1em;">Run the Lab</h2>
+  <pre><code># Linux / macOS
+./scripts/linux/case-study-4.sh
+
+# Windows (PowerShell)
+.\scripts\windows\case-study-4.ps1</code></pre>
+</div>
+
+<!-- Slide 12: Failover Test Commands -->
+<div class="slide" id="s12">
+  <h1>Failover Test: CLI Commands</h1>
+  <h2>Linux / macOS (Azure CLI)</h2>
+  <pre><code># Get Traffic Manager FQDN
+TM_FQDN=$(az network traffic-manager profile show \
+  --resource-group rg-shopeasy-dns \
+  --name tm-shopeasy-failover \
+  --query dnsConfig.fqdn -o tsv)
+
+# Before failover — should return East US IP
+nslookup $TM_FQDN
+
+# Simulate outage: disable East US endpoint
+az network traffic-manager endpoint update \
+  --resource-group rg-shopeasy-dns \
+  --profile-name tm-shopeasy-failover \
+  --name primary-east-us \
+  --type azureEndpoints \
+  --endpoint-status Disabled
+
+# Wait ~60s then verify — should return East US 2 IP
+sleep 60 && nslookup $TM_FQDN
+
+# Re-enable (failback)
+az network traffic-manager endpoint update \
+  --resource-group rg-shopeasy-dns \
+  --profile-name tm-shopeasy-failover \
+  --name primary-east-us \
+  --type azureEndpoints \
+  --endpoint-status Enabled</code></pre>
+</div>
+
+<!-- Slide 13: DNSSEC Verification -->
+<div class="slide" id="s13">
+  <h1>DNSSEC Verification</h1>
+  <h2>Check RRSIG Records</h2>
+  <pre><code># Query with DNSSEC (using dig)
+dig +dnssec shopeasy.example.com A
+
+# Look for:
+#   flags: ... ad;    &larr; "Authenticated Data" flag
+#   RRSIG A 13 ...   &larr; ECDSA P-256 signature</code></pre>
+
+  <h2>After Enabling DNSSEC</h2>
+  <div class="highlight">
+    <strong>Critical step:</strong> You must add the <strong>DS record</strong> to your domain registrar. Without this, the chain of trust is broken and DNSSEC validation will fail for resolvers that check.
+  </div>
+
+  <h2>Key Rotation</h2>
+  <table>
+    <tr><th>Key Type</th><th>Abbreviation</th><th>Rotation</th></tr>
+    <tr><td>Key Signing Key</td><td>KSK</td><td>Yearly (update DS at registrar)</td></tr>
+    <tr><td>Zone Signing Key</td><td>ZSK</td><td>Monthly (automatic)</td></tr>
+  </table>
+</div>
+
+<!-- Slide 14: Key Takeaways -->
+<div class="slide" id="s14">
+  <h1>Key Takeaways</h1>
+  <div class="two-col">
+    <div class="card green">
+      <h3>DNS Management</h3>
+      <ul>
+        <li>Public zones: Internet-facing with full record support</li>
+        <li>Private zones: Internal service discovery</li>
+        <li>NS delegation from registrar to Azure DNS</li>
+        <li>VNet linking for private zone resolution</li>
+      </ul>
+    </div>
+    <div class="card purple">
+      <h3>Traffic Manager</h3>
+      <ul>
+        <li>3 profiles: Geographic, Performance, Priority</li>
+        <li>DNS-based &mdash; no inline proxy</li>
+        <li>Health probes with automatic failover</li>
+        <li>Supports Azure + External endpoints</li>
+      </ul>
+    </div>
+  </div>
+  <div class="two-col" style="margin-top:.5em;">
+    <div class="card orange">
+      <h3>DNSSEC</h3>
+      <ul>
+        <li>Prevents DNS spoofing / cache poisoning</li>
+        <li>Chain of trust: Root &rarr; TLD &rarr; Your zone</li>
+        <li>DS record must be added at registrar</li>
+        <li>ECDSA P-256 signing in Azure</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Dual-Region</h3>
+      <ul>
+        <li>East US (primary) + East US 2 (DR)</li>
+        <li>Subscription policy compliant</li>
+        <li>All infrastructure via Bicep templates</li>
+        <li>Automated failover in &lt;60 seconds</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- Navigation -->
+<div class="nav">
+  <button id="prev" onclick="navigate(-1)" disabled>&larr; Previous</button>
+  <span class="counter" id="counter">1 / 14</span>
+  <button id="next" onclick="navigate(1)">Next &rarr;</button>
+</div>
+
+<script>
+let current = 0;
+const slides = document.querySelectorAll('.slide');
+const total = slides.length;
+
+function navigate(dir) {
+  slides[current].classList.remove('active');
+  current = Math.max(0, Math.min(total - 1, current + dir));
+  slides[current].classList.add('active');
+  document.getElementById('counter').textContent = `${current + 1} / ${total}`;
+  document.getElementById('prev').disabled = current === 0;
+  document.getElementById('next').disabled = current === total - 1;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); navigate(1); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); navigate(-1); }
+  if (e.key === 'Home') { e.preventDefault(); slides[current].classList.remove('active'); current = 0; slides[0].classList.add('active'); navigate(0); }
+  if (e.key === 'End') { e.preventDefault(); slides[current].classList.remove('active'); current = total - 1; slides[current].classList.add('active'); navigate(0); }
+});
+</script>
+</body>
+</html>

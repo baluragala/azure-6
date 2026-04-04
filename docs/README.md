@@ -33,7 +33,7 @@ By the end of this session, learners will be able to:
 
 ## Case Studies
 
-### Case Study 1: Azure Dual-Region Disaster Recovery
+### Case Study 3: Azure Dual-Region Disaster Recovery
 
 **Scenario:** CloudInnovate (a global SaaS company) needs a dual-region DR setup across East US (primary) and East US 2 (standby) with automatic failover.
 
@@ -44,7 +44,7 @@ By the end of this session, learners will be able to:
 - Implement Azure Traffic Manager for priority-based failover
 - Perform a live failover test
 
-📁 Lab files: `labs/case-study-1-dr/`
+📁 Lab files: `labs/case-study-3-dr/`
 
 ---
 
@@ -124,9 +124,14 @@ Connect-AzAccount
 
 ---
 
+## Presentation Slides
+
+- [Case Study 3 - DR Slides](slides/case-study-3.html) (open in browser)
+- [Case Study 4 - DNS Slides](slides/case-study-4.html) (open in browser)
+
 ## Architecture Diagrams
 
-- [Case Study 1 - DR Architecture](architecture/case-study-1-dr.md)
+- [Case Study 3 - DR Architecture](architecture/case-study-3-dr.md)
 - [Case Study 4 - DNS Architecture](architecture/case-study-4-dns.md)
 
 ---
@@ -137,10 +142,11 @@ Connect-AzAccount
 azure-6/
 ├── docs/
 │   ├── README.md                      ← You are here
+│   ├── slides/                        ← HTML presentation slides
 │   ├── architecture/                  ← Architecture diagrams
 │   └── concepts/                      ← Concept documentation
 ├── labs/
-│   ├── case-study-1-dr/               ← Disaster Recovery lab
+│   ├── case-study-3-dr/               ← Disaster Recovery lab
 │   │   ├── 01-vnet/                   ← VNet & Subnet deployment
 │   │   ├── 02-dns/                    ← DNS zones setup
 │   │   ├── 03-arm-templates/          ← VM, LB, Storage templates
