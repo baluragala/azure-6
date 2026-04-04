@@ -9,21 +9,13 @@
       "value": "prod"
     },
     "subnetWebId": {
-      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-cloudinn-dr/providers/Microsoft.Network/virtualNetworks/cloudinn-vnet-prod/subnets/subnet-web"
+      "value": ""
     },
     "subnetAppId": {
-      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-cloudinn-dr/providers/Microsoft.Network/virtualNetworks/cloudinn-vnet-prod/subnets/subnet-app"
+      "value": ""
     },
     "adminUsername": {
       "value": "azureadmin"
-    },
-    "adminPassword": {
-      "reference": {
-        "keyVault": {
-          "id": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-cloudinn-dr/providers/Microsoft.KeyVault/vaults/kv-cloudinn-dr"
-        },
-        "secretName": "vm-admin-password"
-      }
     },
     "vmSize": {
       "value": "Standard_B2ms"

@@ -152,9 +152,9 @@ function Main {
     Write-Host ""
     Write-Host "╔══════════════════════════════════════════════════════════╗" -ForegroundColor Green
     Write-Host "║  Setup complete! Next steps:                            ║" -ForegroundColor Green
-    Write-Host "║  1. Update 7de694dc-7044-4a4a-9a27-d499eb4072b7 in parameters   ║" -ForegroundColor Green
-    Write-Host "║  2. Run: .\scripts\windows\case-study-3.ps1             ║" -ForegroundColor Green
-    Write-Host "║  3. Run: .\scripts\windows\case-study-4.ps1             ║" -ForegroundColor Green
+    Write-Host "║  1. Run: .\scripts\windows\case-study-3.ps1             ║" -ForegroundColor Green
+    Write-Host "║  2. Run: .\scripts\windows\case-study-4.ps1             ║" -ForegroundColor Green
+    Write-Host "║  (Subscription is auto-detected at runtime)             ║" -ForegroundColor Green
     Write-Host "╚══════════════════════════════════════════════════════════╝" -ForegroundColor Green
 }
 

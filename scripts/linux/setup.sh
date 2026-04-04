@@ -144,9 +144,9 @@ main() {
   echo ""
   echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
   echo -e "${GREEN}║  Setup complete! Next steps:                            ║${NC}"
-  echo -e "${GREEN}║  1. Update 7de694dc-7044-4a4a-9a27-d499eb4072b7 in parameters   ║${NC}"
-  echo -e "${GREEN}║  2. Run: ./scripts/linux/case-study-3.sh                ║${NC}"
-  echo -e "${GREEN}║  3. Run: ./scripts/linux/case-study-4.sh                ║${NC}"
+  echo -e "${GREEN}║  1. Run: ./scripts/linux/case-study-3.sh                ║${NC}"
+  echo -e "${GREEN}║  2. Run: ./scripts/linux/case-study-4.sh                ║${NC}"
+  echo -e "${GREEN}║  (Subscription is auto-detected at runtime)             ║${NC}"
   echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
 }
 

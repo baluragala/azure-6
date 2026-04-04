@@ -6,13 +6,13 @@
       "value": "prod"
     },
     "vnetId": {
-      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-cloudinn-dr/providers/Microsoft.Network/virtualNetworks/cloudinn-vnet-prod"
+      "value": ""
     },
     "privateDnsZoneName": {
       "value": "internal.cloudinn.azure"
     },
     "publicDnsZoneName": {
-      "value": "cloudinn-dr.example.com"
+      "value": "cloudinn-app.example.com"
     }
   }
 }

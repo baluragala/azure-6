@@ -6,10 +6,10 @@
       "value": "shopeasy"
     },
     "eastUsPublicIpId": {
-      "value": "/subscriptions/YOUR-SUBSCRIPTION-ID/resourceGroups/rg-shopeasy-us/providers/Microsoft.Network/publicIPAddresses/pip-lb-us-prod"
+      "value": ""
     },
     "eastUs2PublicIpId": {
-      "value": "/subscriptions/YOUR-SUBSCRIPTION-ID/resourceGroups/rg-shopeasy-eastus2/providers/Microsoft.Network/publicIPAddresses/pip-lb-eastus2-prod"
+      "value": ""
     },
     "dnsTtl": {
       "value": 60

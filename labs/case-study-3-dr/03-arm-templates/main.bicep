@@ -254,8 +254,11 @@ resource webVmExtension 'Microsoft.Compute/virtualMachines/extensions@2023-03-01
     typeHandlerVersion: '2.1'
     autoUpgradeMinorVersion: true
     settings: {
-      script: base64('''#!/bin/bash
+      script: base64(format('''#!/bin/bash
 set -e
+
+REGION="{0}"
+HOSTNAME=$(hostname)
 
 # Wait for any existing apt/dpkg locks (unattended-upgrades on first boot)
 for i in $(seq 1 30); do
@@ -271,23 +274,39 @@ done
 apt-get update -y
 apt-get install -y -o DPkg::Lock::Timeout=120 nginx
 
-cat > /etc/nginx/sites-available/default << 'NGINX'
-server {
+cat > /etc/nginx/sites-available/default << NGINX
+server {{
     listen 80;
     server_name _;
-    location /health {
-        return 200 "healthy\n";
+    location /health {{
+        return 200 "healthy | region=$REGION | host=$HOSTNAME\\n";
         add_header Content-Type text/plain;
-    }
-    location / {
-        return 200 "CloudInnovate DR - Azure Failover Active\n";
-        add_header Content-Type text/plain;
-    }
-}
+    }}
+    location / {{
+        default_type text/html;
+        return 200 '<!DOCTYPE html>
+<html><head><title>CloudInnovate - $REGION</title>
+<style>
+  body {{ font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #0078d4, #005a9e); color: #fff; }}
+  .card {{ background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); padding: 3rem; border-radius: 1rem; text-align: center; max-width: 500px; }}
+  h1 {{ margin: 0 0 1rem; font-size: 2rem; }}
+  .region {{ font-size: 1.5rem; background: #ffb900; color: #1a1a1a; padding: 0.5rem 1.5rem; border-radius: 2rem; display: inline-block; margin: 1rem 0; font-weight: bold; }}
+  .meta {{ opacity: 0.85; margin-top: 1rem; line-height: 1.8; }}
+</style></head>
+<body><div class="card">
+  <h1>CloudInnovate</h1>
+  <div class="region">$REGION</div>
+  <div class="meta">
+    <div>Host: $HOSTNAME</div>
+    <div>Served at: $$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)</div>
+  </div>
+</div></body></html>';
+    }}
+}}
 NGINX
 systemctl enable nginx
 systemctl restart nginx
-''')
+''', location))
     }
   }
 }
