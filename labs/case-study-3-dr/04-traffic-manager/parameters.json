@@ -6,10 +6,10 @@
       "value": "cloudinn"
     },
     "primaryPublicIpId": {
-      "value": "/subscriptions/REPLACE_WITH_SUBSCRIPTION_ID/resourceGroups/rg-cloudinn-primary-prod/providers/Microsoft.Network/publicIPAddresses/pip-lb-prod"
+      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-cloudinn-primary-prod/providers/Microsoft.Network/publicIPAddresses/pip-lb-prod"
     },
     "drPublicIpId": {
-      "value": "/subscriptions/REPLACE_WITH_SUBSCRIPTION_ID/resourceGroups/rg-cloudinn-dr-prod/providers/Microsoft.Network/publicIPAddresses/pip-lb-prod"
+      "value": "/subscriptions/7de694dc-7044-4a4a-9a27-d499eb4072b7/resourceGroups/rg-cloudinn-dr-prod/providers/Microsoft.Network/publicIPAddresses/pip-lb-prod"
     },
     "dnsTtl": {
       "value": 30

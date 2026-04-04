@@ -128,10 +128,10 @@ resource lb 'Microsoft.Network/loadBalancers@2023-04-01' = {
     ]
     probes: [
       {
-        name: 'https-probe'
+        name: 'http-probe'
         properties: {
-          protocol: 'Https'
-          port: 443
+          protocol: 'Http'
+          port: 80
           requestPath: '/health'
           intervalInSeconds: 15
           numberOfProbes: 2
@@ -140,7 +140,7 @@ resource lb 'Microsoft.Network/loadBalancers@2023-04-01' = {
     ]
     loadBalancingRules: [
       {
-        name: 'https-rule'
+        name: 'http-rule'
         properties: {
           frontendIPConfiguration: {
             id: resourceId('Microsoft.Network/loadBalancers/frontendIPConfigurations', lbName, 'frontend')
@@ -149,11 +149,11 @@ resource lb 'Microsoft.Network/loadBalancers@2023-04-01' = {
             id: resourceId('Microsoft.Network/loadBalancers/backendAddressPools', lbName, 'web-backend-pool')
           }
           probe: {
-            id: resourceId('Microsoft.Network/loadBalancers/probes', lbName, 'https-probe')
+            id: resourceId('Microsoft.Network/loadBalancers/probes', lbName, 'http-probe')
           }
           protocol: 'Tcp'
-          frontendPort: 443
-          backendPort: 443
+          frontendPort: 80
+          backendPort: 80
           enableFloatingIP: false
           idleTimeoutInMinutes: 4
         }

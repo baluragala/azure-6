@@ -40,12 +40,11 @@ resource tmProfile 'Microsoft.Network/trafficManagerProfiles@2022-04-01' = {
       ttl: dnsTtl
     }
     monitorConfig: {
-      protocol: 'HTTPS'
-      port: 443
+      protocol: 'HTTP'
+      port: 80
       path: probePath
       intervalInSeconds: 10
       timeoutInSeconds: 5
-      // 2 consecutive failures before marking unhealthy (~20-30s detection)
       toleratedNumberOfFailures: 2
     }
     endpoints: [
