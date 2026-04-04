@@ -17,6 +17,10 @@ set -uo pipefail   # -u: unbound vars are errors  -o pipefail: pipe errors propa
                    # NOTE: -e (exit on error) is intentionally omitted so the
                    #       interactive menu survives individual step failures.
 
+# Git Bash on Windows mangles /subscription/... paths into C:/Program Files/Git/...
+# This disables that conversion. Harmless on Linux/macOS.
+export MSYS_NO_PATHCONV=1
+
 # ── Colors ───────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -41,6 +45,10 @@ RESOURCE_GROUP_PRIMARY="rg-${COMPANY_PREFIX}-primary-${ENVIRONMENT}"
 RESOURCE_GROUP_DR="rg-${COMPANY_PREFIX}-dr-${ENVIRONMENT}"
 
 LAB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/labs/case-study-3-dr"
+# Git Bash: convert POSIX path to native Windows so az CLI can find files with spaces
+if command -v cygpath &>/dev/null; then
+  LAB_DIR="$(cygpath -w "${LAB_DIR}")"
+fi
 
 VNET_NAME="${COMPANY_PREFIX}-vnet-${ENVIRONMENT}"
 LB_PIP_NAME="pip-lb-${ENVIRONMENT}"
@@ -81,7 +89,7 @@ az_deploy() {
   print_step "Submitting deployment: ${label}..."
 
   local log_file
-  log_file=$(mktemp /tmp/az_deploy_XXXXXX.log)
+  log_file=$(mktemp /tmp/az_deploy_XXXXXX)
 
   az deployment group create \
     --resource-group "${rg}" \
